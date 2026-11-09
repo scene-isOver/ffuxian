@@ -23,7 +23,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import get_linear_schedule_with_warmup
 
-from .config import CLASSIFIER_DIR, DataConfig, default_classifier_specs
+from .config import (
+    CLASSIFIER_DIR, DataConfig, default_classifier_specs,
+    validate_classifier_models,
+)
 from .data import (
     EncodedDataset, build_splits, encode_split, get_tokenizer, print_split_stats,
 )
@@ -193,6 +196,7 @@ def main():
                                      args.tiny_bert_model, args.distil_roberta_model)
     if args.only:
         specs = [s for s in specs if s.name in set(args.only)]
+    validate_classifier_models(specs)
 
     tokenizers = {}
     for spec in specs:

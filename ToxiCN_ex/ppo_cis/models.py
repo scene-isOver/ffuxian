@@ -55,7 +55,8 @@ class TransformerClassifier(nn.Module):
                  freeze_layers: int = 0):
         super().__init__()
         self.encoder = AutoModelForSequenceClassification.from_pretrained(
-            model_name, num_labels=num_classes, hidden_dropout_prob=dropout)
+            model_name, num_labels=num_classes, hidden_dropout_prob=dropout,
+            local_files_only=True)
         _freeze_layers(self.encoder, freeze_layers)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None,
@@ -74,7 +75,7 @@ class RoBertFusionClassifier(nn.Module):
                  num_filters: int = 50, kernel_sizes: Sequence[int] = (3, 4, 5),
                  dropout: float = 0.5, freeze_layers: int = 8):
         super().__init__()
-        self.encoder = AutoModel.from_pretrained(model_name)
+        self.encoder = AutoModel.from_pretrained(model_name, local_files_only=True)
         hidden = self.encoder.config.hidden_size
 
         self.dropout = nn.Dropout(dropout)
@@ -122,7 +123,7 @@ class TKEBertClassifier(nn.Module):
                  num_toxic_types: int = 6, dropout: float = 0.5,
                  freeze_layers: int = 0, fc_hidden_dim: int = 256):
         super().__init__()
-        self.bert = AutoModel.from_pretrained(model_name)
+        self.bert = AutoModel.from_pretrained(model_name, local_files_only=True)
         hidden = self.bert.config.hidden_size
 
         # index 0 = no knowledge, 1..5 = the five ToxiCN lexicon categories

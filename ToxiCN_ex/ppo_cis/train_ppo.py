@@ -22,6 +22,7 @@ import torch
 from .config import (
     CLASSIFIER_DIR, DataConfig, PPO_DIR, PPOConfig, REPORT_DIR, RewardConfig,
     StaticConfig, default_classifier_specs, stage_indices,
+    validate_classifier_models,
 )
 from .data import build_splits, print_split_stats
 from .pipeline import PPOEnv, score_split, static_baselines
@@ -131,6 +132,7 @@ def main():
 
     specs = default_classifier_specs(args.bert_model, args.roberta_model,
                                      args.tiny_bert_model, args.distil_roberta_model)
+    validate_classifier_models(specs)
     s1, s2 = stage_indices(specs)
     print(f"Stage 1: {[specs[i].name for i in s1]}")
     print(f"Stage 2: {[specs[i].name for i in s2]}")

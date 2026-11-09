@@ -66,28 +66,37 @@ TINY_BERT_MODEL_NAME = os.environ.get(
 DISTIL_ROBERTA_MODEL_NAME = os.environ.get(
     "PPO_CIS_DISTIL_ROBERTA_MODEL", str(MODEL_ROOT / "chinese_roberta_L-4_H-256"))
 
-_WARNED_MODELS: set = set()
+_WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin", "tf_model.h5",
+                 "flax_model.msgpack")
 
 
 def resolve_model_name(name: str) -> str:
-    """Map a model name to its local directory when one exists.
+    """Map a model name to a local directory, never to the HuggingFace hub.
 
-    ``name`` may already be a directory (returned as-is), a HuggingFace id such
-    as ``hfl/chinese-roberta-wwm-ext`` (resolved to
-    ``MODEL_ROOT/chinese-roberta-wwm-ext``), or a bare folder name.  When no
-    local folder is found the original ``name`` is returned (so HuggingFace ids
-    still work through the normal cache) and a warning is printed once.
+    ``name`` must be an existing directory or a bare ``hfl/chinese-roberta-wwm-ext``
+    (resolved to ``MODEL_ROOT/chinese-roberta-wwm-ext``).  Downloading is
+    disabled: a missing or incomplete directory raises ``FileNotFoundError``.
     """
-    path = Path(name)
-    if path.exists():
-        return str(path)
-    candidate = MODEL_ROOT / path.name
-    if candidate.exists():
-        return str(candidate)
-    if name not in _WARNED_MODELS:
-        _WARNED_MODELS.add(name)
-        print(f"[ppo_cis] local model dir not found: {candidate}; using '{name}'")
-    return name
+    path = Path(name).expanduser()
+    candidate = path if path.is_dir() else MODEL_ROOT / path.name
+    if not candidate.is_dir():
+        tried = [str(path)] if str(path) != str(candidate) else []
+        tried.append(str(candidate))
+        raise FileNotFoundError(
+            f"Local model directory not found for '{name}'.\n"
+            + "".join(f"  tried: {p}\n" for p in tried)
+            + "  Pass --bert_model / --roberta_model / --tiny_bert_model / "
+            "--distil_roberta_model, or set PPO_CIS_MODEL_ROOT.\n"
+            "  Downloading models is disabled."
+        )
+    if not (candidate / "config.json").is_file():
+        raise FileNotFoundError(
+            f"{candidate} is not a HuggingFace model directory: config.json missing")
+    if not any((candidate / f).is_file() for f in _WEIGHT_FILES):
+        raise FileNotFoundError(
+            f"{candidate} has no model weights "
+            f"({' / '.join(_WEIGHT_FILES)}); downloading models is disabled")
+    return str(candidate)
 
 
 @dataclass
@@ -165,6 +174,23 @@ def stage_indices(specs: Sequence[ClassifierSpec]) -> Tuple[List[int], List[int]
     if not stage1 or not stage2:
         raise ValueError("Both stages need at least one classifier")
     return stage1, stage2
+
+
+def validate_classifier_models(specs: Sequence[ClassifierSpec]) -> None:
+    """Fail before training starts, listing every model that is missing.
+
+    Keeps the pipeline from training the first classifiers and only then
+    discovering that a later checkpoint is unavailable.
+    """
+    problems = []
+    for spec in specs:
+        try:
+            resolve_model_name(spec.model_name)
+        except FileNotFoundError as exc:
+            problems.append(f"[{spec.name}] {exc}")
+    if problems:
+        raise FileNotFoundError(
+            "Missing pretrained models:\n\n" + "\n\n".join(problems))
 
 
 @dataclass

@@ -58,9 +58,10 @@ tokenizer 文件）。改完 `MODEL_ROOT` 后不需要再动别的地方。
 环境变量 `PPO_CIS_MODEL_ROOT` 和 `--bert_model` / `--roberta_model` /
 `--tiny_bert_model` / `--distil_roberta_model` 只是可选的覆盖方式，直接改代码时不用管。
 
-`config.resolve_model_name()` 会优先查找 `MODEL_ROOT/<模型文件夹名>`，找不到时才回退到
-HuggingFace id 并打印提示；旧 checkpoint 里记录的 `bert-base-chinese` /
-`hfl/chinese-roberta-wwm-ext` 也会被自动映射到对应本地目录。
+`config.resolve_model_name()` 只查找本地目录（`MODEL_ROOT/<模型文件夹名>`），
+**不会联网下载**：目录不存在或缺 `config.json` / 权重文件时直接抛 `FileNotFoundError`，
+训练/PPO 启动前还会一次性列出所有缺失的模型。旧 checkpoint 里记录的 `bert-base-chinese` /
+`hfl/chinese-roberta-wwm-ext` 会被按文件夹名映射到对应本地目录。
 
 ## 损失函数
 

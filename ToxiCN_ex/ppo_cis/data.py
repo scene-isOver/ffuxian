@@ -155,8 +155,10 @@ def build_stance_ids(input_ids: List[int]) -> List[int]:
 
 def get_tokenizer(model_name: str):
     # ``use_fast=True`` is much faster for the Chinese BERT/RoBERTa tokenizers.
-    # ``resolve_model_name`` maps HF ids / checkpoint names onto MODEL_ROOT.
-    return AutoTokenizer.from_pretrained(resolve_model_name(model_name), use_fast=True)
+    # ``resolve_model_name`` maps HF ids / checkpoint names onto MODEL_ROOT and
+    # raises when the directory is missing (no network fallback).
+    return AutoTokenizer.from_pretrained(
+        resolve_model_name(model_name), use_fast=True, local_files_only=True)
 
 
 def _cache_path(split_name: str, tokenizer_name: str, max_len: int,
