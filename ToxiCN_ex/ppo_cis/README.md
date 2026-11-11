@@ -92,22 +92,23 @@ tokenizer 文件）。改完 `MODEL_ROOT` 后不需要再动别的地方。
 - **状态**：β 向量，长度 K=5。调用过的分类器填 `p(toxic)`，未调用填 `-1`（Eq. 1）。
 - **动作**：`0..K-1` 调用分类器 k；`K` 判 toxic；`K+1` 判 nontoxic。
 - **阶段**：
-  - Stage 1：`toxic` 表示**升级到 Stage 2**；高置信 `nontoxic` 才允许退出；
-    Stage 1 两个分类器都调用完仍未退出 → 自动升级。
-  - Stage 2：`toxic` / `nontoxic` 直接终止；三个分类器用完 → 用平均概率强制判定。
-- **阈值门控**：Stage 1 的 nontoxic 退出、Stage 2 的两个判定都需要
-  `p >= threshold`（默认 0.70）；否则只能继续调用。门控只是动作掩码，
-  不改变 PPO 的裁剪目标。
+  - Stage 1：只输出“无毒”。融合后的无毒概率达阈值即可退出；**只要调用过任意
+    一个模型，就允许随时升级到 Stage 2**，由策略自己决定何时跳过剩余小模型。
+  - Stage 2：按同一阈值单侧判定——无毒概率达阈值判无毒，否则判有毒；调用过
+    大模型后判定动作始终合法，策略可立即判定也可再调一个模型。
+- **阈值门控**：Stage 1 退出与 Stage 2 判定共用一个 `threshold`（默认 0.70），
+  作用在**当前阶段已调用模型的平均有毒概率**上（`1 - mean(p) >= threshold`）。
+  不再使用 `min(p)`（那等于“挑最乐观的模型听”），也不再保留 `0.3~0.7` 死区。
 - **奖励**：
-  - 分类奖励 Eq. (1)：正确 `+r`，错误 `-iota*r`（`r=10, iota=2`）；
-  - 时间奖励 Eq. (2)：按**该样本总耗时** `t` 计算，`u=1s, phi=1, theta=10`；
-  - 吞吐奖励 Eq. (6)：`psi_M = M / sum(t_i)`，按 rollout batch 计算后均分到样本。
+  - 分类奖励 Eq. (1)：正确 `+r`，错误 `-iota*r`（`r=1, iota=2`）；
+  - 时间奖励 Eq. (2)：改为逐样本线性惩罚 `-theta*t/u`（`u=1.5ms, theta=0.5`）；
+  - 吞吐奖励 Eq. (6)：`psi_M = M / sum(t_i)`，仅作报告指标（`throughput_scale=0`）。
 - **PPO-Clip**：`epsilon=0.2`、GAE(`gamma=0.99, lambda=0.95`)、
   value loss `0.5`、熵 `0.01`、辅助交叉熵 `0.10`、梯度裁剪 `0.5`；
   batch `256`、每个 batch 复用 `4` 次、共 `10` 个 epoch、MLP hidden `64`。
-- **防塌缩**：rollout 时以 `explore_decide=0.25` 的概率强制选择判定动作，
-  保证早退动作始终有样本量。若训练中仍然不早退，可以把 `--entropy_coef`
-  调到 `0.05` 或把 `--explore_decide` 调到 `0.35`。
+- **防塌缩**：rollout 时以 `explore_decide=0.10` 的概率强制选择判定动作，
+  保证判定动作始终有样本量。若训练中仍然不早退，可以把 `--entropy_coef`
+  调到 `0.05` 或把 `--explore_decide` 调到 `0.30`。
 
 ## 与论文的差异
 
@@ -115,8 +116,9 @@ tokenizer 文件）。改完 `MODEL_ROOT` 后不需要再动别的地方。
 2. 数据集：论文用 ToxiGen / AugmenToxic，这里用 ToxiCN 中文数据。
 3. 模型：论文的 α 版本是英文 `bert-base-uncased` / `roberta-base`，
    这里是中文 `bert-base-chinese` / `chinese-roberta-wwm-ext`，ψ 版本是中文 tiny 模型。
-4. Eq. (2) 第二段 `phi + theta*log2(t-u)` 在论文中随 `t` 增大而变大（越慢奖励越高），
-   这里把符号改成单调惩罚 `phi - theta*log2((t-u)+1)`；第一段不变。
+4. Eq. (2) 按秒设计，实际延迟只有毫秒级：`t << u` 时整个区间只变化 0.05，
+   且在 `t -> u` 处发散。这里改成逐样本线性惩罚 `-theta*t/u`，方向和单调性
+   与论文一致，但尺度可学（否则时间项对策略没有梯度）。
 5. Eq. (7) 的 batch 调整项 `Delta` 定义不明确，未实现；只保留 Eq. (6)。
 6. 延迟不是逐条 `batch=1` 计时，而是用实际 batch 吞吐折算单样本延迟。
 

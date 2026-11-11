@@ -106,9 +106,9 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
                 mean_p = ((state_v * used_mask).sum(dim=1)
                           / used_mask.sum(dim=1).clamp(min=1))
                 prefer = torch.where(
-                    mean_p >= 0.5,
-                    torch.full_like(sampled, env.K),
-                    torch.full_like(sampled, env.K + 1))
+                    1.0 - mean_p >= env.threshold,
+                    torch.full_like(sampled, env.K + 1),
+                    torch.full_like(sampled, env.K))
                 other = torch.where(prefer == env.K, env.K + 1, env.K)
                 prefer_ok = decide_ok.gather(
                     1, (prefer - env.K).unsqueeze(1)).squeeze(1)
@@ -150,6 +150,8 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
         "episode_reward": float(rewards_t[stack(valid_list)].sum()),
         "avg_calls": float(env.calls.float().mean()),
         "throughput_psi": float(psi),
+        # 完全没有升级到第二阶段的样本比例：衡量策略“该不该跳”的行为
+        "no_escalate_rate": float((env.stage == 1).float().mean()),
     }
     return Rollout(
         obs=stack(obs_list),
@@ -242,7 +244,7 @@ def ppo_update(policy: ActorCritic, optimizer: torch.optim.Optimizer,
 
 def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfig,
               log=print) -> Tuple[ActorCritic, List[Dict[str, float]]]:
-    policy = ActorCritic(env.K, env.action_dim, cfg.hidden_dim).to(device)
+    policy = ActorCritic(env.obs_dim, env.action_dim, cfg.hidden_dim).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.lr)
 
     n_samples = env.probs.shape[0]
@@ -258,12 +260,14 @@ def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfi
             stats = ppo_update(policy, optimizer, rollout, cfg)
             stats["avg_calls"] = rollout.stats["avg_calls"]
             stats["episode_reward"] = rollout.stats["episode_reward"]
+            stats["no_escalate_rate"] = rollout.stats["no_escalate_rate"]
             stats["train_accuracy"] = float(
                 (env.pred == env.cur_labels).float().mean().item())
             batch_stats.append(stats)
 
         keys = ("loss", "policy_loss", "value_loss", "entropy", "aux_ce",
-                "clip_fraction", "avg_calls", "episode_reward", "train_accuracy")
+                "clip_fraction", "avg_calls", "episode_reward", "train_accuracy",
+                "no_escalate_rate")
         epoch_stats = {
             key: float(sum(s[key] for s in batch_stats) / len(batch_stats))
             for key in keys
@@ -271,9 +275,10 @@ def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfi
         epoch_stats["epoch"] = epoch + 1
         history.append(epoch_stats)
         log("PPO epoch {}/{}: reward={:.2f} acc={:.4f} calls={:.2f} "
-            "loss={:.4f} pi={:.4f} v={:.4f} H={:.3f} auxCE={:.4f}".format(
+            "noesc={:.3f} loss={:.4f} pi={:.4f} v={:.4f} H={:.3f} auxCE={:.4f}".format(
                 epoch + 1, cfg.epochs, epoch_stats["episode_reward"],
                 epoch_stats["train_accuracy"], epoch_stats["avg_calls"],
+                epoch_stats["no_escalate_rate"],
                 epoch_stats["loss"], epoch_stats["policy_loss"],
                 epoch_stats["value_loss"], epoch_stats["entropy"],
                 epoch_stats["aux_ce"]))

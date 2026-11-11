@@ -105,14 +105,14 @@ def main():
                         help="weight of the auxiliary cross-entropy loss")
     parser.add_argument("--entropy_coef", default=0.01, type=float,
                         help="entropy bonus; raise it if the policy stops exploring early exits")
-    parser.add_argument("--explore_decide", default=0.25, type=float,
+    parser.add_argument("--explore_decide", default=0.10, type=float,
                         help="fraction of rollouts forced to decide early (anti-collapse)")
-    parser.add_argument("--time_budget", default=1.0, type=float,
-                        help="u in Eq.(2) time reward, in seconds (paper: 1.0)")
-    parser.add_argument("--time_theta", default=10.0, type=float,
-                        help="theta_1 in Eq.(2) (paper: 10)")
-    parser.add_argument("--throughput_scale", default=1.0, type=float,
-                        help="weight of the Eq.(6) batch throughput bonus")
+    parser.add_argument("--time_budget", default=0.0015, type=float,
+                        help="u in the time reward, in seconds (1.5 ms reference budget)")
+    parser.add_argument("--time_theta", default=0.5, type=float,
+                        help="theta_1: weight of the per-sample latency penalty")
+    parser.add_argument("--throughput_scale", default=0.0, type=float,
+                        help="weight of the Eq.(6) batch throughput bonus (report-only when 0)")
     parser.add_argument("--confidence_threshold", default=0.70, type=float,
                         help="threshold of the fixed cascade baseline")
     parser.add_argument("--threshold", default=0.70, type=float,
@@ -160,7 +160,7 @@ def main():
     PPO_DIR.mkdir(parents=True, exist_ok=True)
     torch.save({
         "state_dict": policy.state_dict(),
-        "state_dim": train_env.K,
+        "state_dim": train_env.obs_dim,
         "action_dim": train_env.action_dim,
         "hidden_dim": ppo_cfg.hidden_dim,
         "specs": [asdict(spec) for spec in specs],

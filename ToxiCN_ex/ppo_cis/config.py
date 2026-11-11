@@ -203,7 +203,7 @@ class PPOConfig:
     entropy_coef: float = 0.01
     value_coef: float = 0.5
     aux_coef: float = 0.10         # weight of the auxiliary cross-entropy head
-    explore_decide: float = 0.25   # probability of forcing an early decision in rollouts
+    explore_decide: float = 0.10   # 训练 rollout 中强制提前判定的比例（防塌缩）
     max_grad_norm: float = 0.5
     batch_size: int = 256          # samples per rollout batch
     epochs: int = 10               # full passes over ppo_train
@@ -215,17 +215,25 @@ class PPOConfig:
 
 @dataclass
 class RewardConfig:
-    """Reward terms from Eq. (1)-(6) of the paper.
+    """奖励项，对应论文 Eq. (1)-(6)，并做了两处必要的尺度修正。
 
-    ``r`` and ``iota``: classification reward, ``u``/``phi``/``theta``: time
-    reward Eq. (2), ``throughput_scale``: weight of the Eq. (6) batch bonus.
+    ``r`` / ``iota``：分类奖励；``u`` / ``phi`` / ``theta``：时间奖励；
+    ``throughput_scale``：Eq. (6) 批量吞吐奖励的权重。
+
+    与论文的差异（因为实际延迟在毫秒级）：
+    1. ``r`` 从 10 降到 1，让分类奖励与时间奖励处在同一量级；
+    2. Eq. (2) 的 ``log2(u - t)`` 在 ``t << u`` 时几乎是常数（整个延迟区间只
+       变化 0.05），且在 ``t -> u`` 处发散，因此实现改为线性惩罚
+       ``-theta * t / u``，见 ``pipeline.time_reward``；
+    3. Eq. (6) 的批量吞吐是 batch 常数，在优势标准化后会被抵消，故默认
+       ``throughput_scale=0``，只作为报告指标保留。
     """
-    correct_reward: float = 10.0      # r
+    correct_reward: float = 1.0       # r
     penalty_factor: float = 2.0       # iota
-    time_budget: float = 1.0          # u, seconds (paper Table 5)
-    time_phi: float = 1.0             # phi
-    time_theta: float = 10.0          # theta_1
-    throughput_scale: float = 1.0     # Eq.(6) bonus weight
+    time_budget: float = 0.0015       # u, seconds（1.5 ms 参考预算，见 time_reward）
+    time_phi: float = 0.0             # phi
+    time_theta: float = 0.5           # theta_1
+    throughput_scale: float = 0.0     # Eq.(6) 仅作报告指标，默认不参与训练信号
     eps: float = 1e-6
 
 

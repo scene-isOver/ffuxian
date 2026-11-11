@@ -34,13 +34,14 @@ def main():
     parser.add_argument("--ppo_device", default="cpu")
     parser.add_argument("--max_len", default=96, type=int)
     parser.add_argument("--epochs", default=10, type=int, help="PPO epochs")
-    parser.add_argument("--time_budget", default=1.0, type=float,
-                        help="u in Eq.(2), seconds (paper: 1.0)")
-    parser.add_argument("--time_theta", default=10.0, type=float)
-    parser.add_argument("--throughput_scale", default=1.0, type=float)
+    parser.add_argument("--time_budget", default=0.0015, type=float,
+                        help="u in the time reward, seconds (1.5 ms reference budget)")
+    parser.add_argument("--time_theta", default=0.5, type=float)
+    parser.add_argument("--throughput_scale", default=0.0, type=float,
+                        help="Eq.(6) bonus weight; 0 keeps it report-only")
     parser.add_argument("--aux_coef", default=0.10, type=float)
     parser.add_argument("--entropy_coef", default=0.01, type=float)
-    parser.add_argument("--explore_decide", default=0.25, type=float)
+    parser.add_argument("--explore_decide", default=0.10, type=float)
     parser.add_argument("--threshold", default=0.70, type=float)
     parser.add_argument("--only", nargs="*", default=None)
     parser.add_argument("--force", action="store_true")

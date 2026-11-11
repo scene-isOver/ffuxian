@@ -8,15 +8,14 @@ Environment (two stages, following the paper's MDP):
     state   : beta vector of length K; called classifiers hold p(toxic),
               uncalled classifiers hold -1.
     actions : 0..K-1 = call classifier k, K = "toxic", K+1 = "nontoxic".
-    stage 1 : only a high-confidence "nontoxic" exits.  "toxic" (or exhausting
-              all stage-1 classifiers) escalates the sample to stage 2.
-    stage 2 : "toxic" / "nontoxic" terminate the episode.
-    reward  : time reward Eq.(2) on the episode's total latency, classification
-              reward r / -iota*r, plus a batch throughput bonus Eq.(6).
+    stage 1 : 只输出“无毒”；融合概率达阈值即可出口，调用过任意模型后也可随时
+              升级到第二阶段（策略自己决定什么时候跳过剩余小模型）。
+    stage 2 : 按同一阈值单侧判定：无毒概率达阈值判无毒，否则判有毒。
+    reward  : 逐样本时间惩罚（time_reward）+ 分类奖励 r / -iota*r
+              + 可选的 Eq.(6) 吞吐奖励（默认权重 0，仅作报告指标）。
 """
 from __future__ import annotations
 
-import math
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
@@ -169,20 +168,14 @@ def static_baselines(probs: np.ndarray, labels: np.ndarray, latencies: np.ndarra
 # ----------------------------------------------------------------- rewards ----
 
 def time_reward(total_latency_sec: float, cfg: RewardConfig) -> float:
-    """Eq. (2): reward for the episode's total processing time ``t``.
+    """单条样本的处理时间惩罚（逐样本）。
 
-    ``phi + theta * log2(u - t)`` when the episode finishes inside the budget,
-    and a monotonically decreasing penalty when it exceeds ``u``.  The paper's
-    second branch ``phi + theta * log2(t - u)`` grows with ``t`` (a slower
-    episode would be rewarded more), so the sign is flipped here to keep the
-    reward monotone; everything else follows Eq. (2).
+    论文 Eq. (2) 是 ``phi + theta * log2(u - t)``，但它按秒设计：实际延迟只有
+    1 ms 量级，``t << u`` 时整个可行区间只变化 0.05，几乎没有梯度；而且
+    ``t -> u`` 处会发散到 -inf，低预算下不可用。这里改成线性、无量纲的惩罚
+    ``-theta * t / u``：t 越快惩罚越小，量级与分类奖励可比。
     """
-    u = cfg.time_budget
-    if total_latency_sec < u:
-        return cfg.time_phi + cfg.time_theta * math.log2(
-            max(u - total_latency_sec, cfg.eps))
-    return cfg.time_phi - cfg.time_theta * math.log2(
-        max(total_latency_sec - u, 0.0) + 1.0)
+    return cfg.time_phi - cfg.time_theta * total_latency_sec / max(cfg.time_budget, cfg.eps)
 
 
 def throughput_bonus(total_latency_sec: float, n_samples: int,
@@ -232,22 +225,32 @@ class PPOEnv:
         return self.obs()
 
     def obs(self) -> torch.Tensor:
-        # beta vector: p(toxic) for called classifiers, -1 for the others
-        return self.state.clone()
+        """状态：β 向量（K 维）+ 一个阶段标志位。
+
+        β 向量的前两位是小模型的概率、后三位是大模型的概率；当“两个小模型都调过、
+        还没升级”和“刚升级、还没调大模型”时 β 完全相同，仅靠 β 无法区分这两
+        种处境（前者还能出口判无毒，后者必须先调大模型）。因此额外拼接一维阶段
+        标志，让策略和价值函数能判断“现在是不是已经进入第二阶段”。
+        """
+        stage_flag = (self.stage == 2).float().unsqueeze(1)
+        return torch.cat([self.state, stage_flag], dim=1)
+
+    @property
+    def obs_dim(self) -> int:
+        return self.K + 1
 
     def _stage_columns(self, i: int) -> List[int]:
         return self.stage1_idx if int(self.stage[i]) == 1 else self.stage2_idx
 
-    def _stage_exhausted(self, i: int) -> bool:
-        cols = self._stage_columns(i)
-        return all(bool(self.used[i, j]) for j in cols)
-
     def action_mask(self) -> torch.Tensor:
-        """Legal actions for every sample.
+        """返回每条样本当前的合法动作掩码。
 
-        Stage 1: a high-confidence nontoxic exits; a high-confidence toxic (or
-        exhausting stage 1) escalates.  Stage 2: a high-confidence toxic /
-        nontoxic terminates; exhausting stage 2 forces a decision.
+        第一阶段：只输出“无毒”。融合后的无毒概率达到阈值就允许出口；只要已经
+        调用过至少一个模型，就允许随时升级到第二阶段（不再要求把第一阶段用满，
+        这样策略才能学“什么时候跳过剩下的小模型”）。
+
+        第二阶段：按同一个阈值做单侧判定——无毒概率达阈值判无毒，否则判有毒。
+        不再保留两个阈值造成的 0.3~0.7 死区，也不会因为“拿不定主意”而空转。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -261,24 +264,19 @@ class PPOEnv:
             used_cols = [k for k in cols if bool(self.used[i, k])]
             if not used_cols:
                 continue
-            used_probs = torch.stack([self.state[i, k] for k in used_cols])
-            best_toxic = float(used_probs.max())
-            best_nontoxic = 1.0 - float(used_probs.min())
+            mean_toxic = float(torch.stack(
+                [self.state[i, k] for k in used_cols]).mean())
+            mean_nontoxic = 1.0 - mean_toxic
 
             if int(self.stage[i]) == 1:
-                if best_nontoxic >= self.threshold:
-                    mask[i, self.K + 1] = True
-                if best_toxic >= self.threshold or self._stage_exhausted(i):
-                    mask[i, self.K] = True
+                if mean_nontoxic >= self.threshold:
+                    mask[i, self.K + 1] = True      # 融合概率可信 -> 判无毒出口
+                mask[i, self.K] = True              # 调用过模型即可升级
             else:
-                if best_toxic >= self.threshold or self._stage_exhausted(i):
-                    mask[i, self.K] = True
-                if best_nontoxic >= self.threshold or self._stage_exhausted(i):
-                    mask[i, self.K + 1] = True
-
-            if not mask[i].any():      # safety net: never leave a sample stuck
-                mask[i, self.K] = True
-                mask[i, self.K + 1] = True
+                if mean_nontoxic >= self.threshold:
+                    mask[i, self.K + 1] = True      # 单侧阈值 -> 判无毒
+                else:
+                    mask[i, self.K] = True          # 其余一律判有毒
         return mask
 
     # ------------------------------------------------------------- rewards ----
@@ -297,11 +295,15 @@ class PPOEnv:
         self.done[i] = True
 
     def _force_decision(self, i: int, rewards: torch.Tensor) -> None:
+        """步数用尽时的兜底：按与掩码完全相同的单侧阈值规则判定。"""
         cols = [k for k in self._stage_columns(i) if bool(self.used[i, k])]
         if not cols:
             cols = [k for k in range(self.K) if bool(self.used[i, k])]
-        mean_p = float(self.cur_probs[i, cols].mean()) if cols else 0.5
-        self._terminate(i, int(mean_p >= 0.5), rewards)
+        if not cols:
+            self._terminate(i, 0, rewards)
+            return
+        mean_nontoxic = 1.0 - float(self.cur_probs[i, cols].mean())
+        self._terminate(i, 0 if mean_nontoxic >= self.threshold else 1, rewards)
 
     # ---------------------------------------------------------------- step ----
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -326,12 +328,8 @@ class PPOEnv:
             self.used[i, k] = True
             self.calls[i] += 1
             self.elapsed[i] += float(self.latencies[k])
-
-            if self._stage_exhausted(i):
-                if int(self.stage[i]) == 1:
-                    self.stage[i] = 2              # no stage-1 model left -> escalate
-                else:
-                    self._force_decision(i, rewards)
+            # 不再在“阶段用尽”时强制切换：升级与判定都交给策略按掩码决定，
+            # 否则打完两个小模型就再也没有“出口判无毒”的机会。
         return rewards, self.done.clone()
 
     def sample_latency(self) -> torch.Tensor:
