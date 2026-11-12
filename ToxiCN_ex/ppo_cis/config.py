@@ -197,17 +197,17 @@ def validate_classifier_models(specs: Sequence[ClassifierSpec]) -> None:
 class PPOConfig:
     """Values follow Table 5 of the PPO-CIS paper where applicable."""
     clip: float = 0.2              # epsilon in the clipped surrogate objective
-    lr: float = 3e-4
+    lr: float = 1e-3               # 3e-4 时 ratio 始终落在 [0.8,1.2]，clip 从不触发
     gamma: float = 0.99
     lam: float = 0.95
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.05     # 0.01 时熵只从 0.770 掉到 0.742，策略几乎不动
     value_coef: float = 0.5
     aux_coef: float = 0.10         # weight of the auxiliary cross-entropy head
     explore_decide: float = 0.10   # 训练 rollout 中强制提前判定的比例（防塌缩）
-    max_grad_norm: float = 0.5
+    max_grad_norm: float = 1.0     # 配合 lr=1e-3；0.5 会频繁截断，实际步长上不去
     batch_size: int = 256          # samples per rollout batch
     epochs: int = 10               # full passes over ppo_train
-    update_epochs: int = 4         # PPO re-use epochs per rollout batch
+    update_epochs: int = 10        # 每个 batch 复用次数；4 次时单轮更新量太小
     hidden_dim: int = 64
     seed: int = 42
     max_steps: int = 8             # 2 stage-1 calls + escalate + 3 stage-2 calls + decision

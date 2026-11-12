@@ -99,11 +99,13 @@ def main():
     parser.add_argument("--max_len", default=96, type=int)
     parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--batch_size", default=256, type=int)
-    parser.add_argument("--update_epochs", default=4, type=int)
+    parser.add_argument("--update_epochs", default=10, type=int)
     parser.add_argument("--clip", default=0.2, type=float)
+    parser.add_argument("--lr", default=1e-3, type=float,
+                        help="learning rate of the PPO MLP")
     parser.add_argument("--aux_coef", default=0.10, type=float,
                         help="weight of the auxiliary cross-entropy loss")
-    parser.add_argument("--entropy_coef", default=0.01, type=float,
+    parser.add_argument("--entropy_coef", default=0.05, type=float,
                         help="entropy bonus; raise it if the policy stops exploring early exits")
     parser.add_argument("--explore_decide", default=0.10, type=float,
                         help="fraction of rollouts forced to decide early (anti-collapse)")
@@ -143,7 +145,7 @@ def main():
                               args.force_scores)
 
     ppo_cfg = PPOConfig(epochs=args.epochs, batch_size=args.batch_size,
-                        update_epochs=args.update_epochs, clip=args.clip,
+                        update_epochs=args.update_epochs, clip=args.clip, lr=args.lr,
                         aux_coef=args.aux_coef, entropy_coef=args.entropy_coef,
                         explore_decide=args.explore_decide, seed=args.seed)
     reward_cfg = RewardConfig(time_budget=args.time_budget,
