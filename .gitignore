@@ -13,5 +13,8 @@ ToxiCN_ex/train_eval.py
 
 
 ToxiCN_ex/ppo_cis/__pycache__
-ToxiCN_ex/ppo_cis/artifacts
 ToxiCN_ex/ppo_cis/__init__.py
+
+ToxiCN_ex/ppo_cis/artifacts/cache
+ToxiCN_ex/ppo_cis/artifacts/classifiers
+ToxiCN_ex/ppo_cis/artifacts/ppo

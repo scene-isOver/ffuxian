@@ -1,0 +1,62 @@
+{
+  "_meta": {
+    "method": "temperature scaling (minimize NLL)",
+    "split": "clf_dev",
+    "n_samples": 960,
+    "grid": [
+      0.2,
+      10.0,
+      0.02
+    ],
+    "note": "p_calibrated = sigmoid(logit(p) / T); argmax at 0.5 unchanged"
+  },
+  "temperatures": {
+    "tiny_bert": 1.3,
+    "distil_roberta": 1.16,
+    "bert": 1.7,
+    "roberta_fusion": 0.54,
+    "tke_bert": 1.36
+  },
+  "details": {
+    "tiny_bert": {
+      "temperature": 1.3,
+      "nll_before": 0.578929,
+      "nll_after": 0.571358,
+      "ece_before": 0.051154,
+      "ece_after": 0.037842,
+      "accuracy": 0.707292
+    },
+    "distil_roberta": {
+      "temperature": 1.16,
+      "nll_before": 0.530931,
+      "nll_after": 0.527942,
+      "ece_before": 0.048858,
+      "ece_after": 0.03648,
+      "accuracy": 0.751042
+    },
+    "bert": {
+      "temperature": 1.7,
+      "nll_before": 0.490289,
+      "nll_after": 0.433704,
+      "ece_before": 0.093592,
+      "ece_after": 0.032943,
+      "accuracy": 0.809375
+    },
+    "roberta_fusion": {
+      "temperature": 0.54,
+      "nll_before": 0.56966,
+      "nll_after": 0.541694,
+      "ece_before": 0.086279,
+      "ece_after": 0.034792,
+      "accuracy": 0.730208
+    },
+    "tke_bert": {
+      "temperature": 1.36,
+      "nll_before": 0.497598,
+      "nll_after": 0.480774,
+      "ece_before": 0.073484,
+      "ece_after": 0.055098,
+      "accuracy": 0.776042
+    }
+  }
+}
