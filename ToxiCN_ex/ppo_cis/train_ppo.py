@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import random
 from dataclasses import asdict
 from typing import Dict
 
+import numpy as np
 import torch
 
 from .config import (
@@ -130,6 +132,12 @@ def main():
     parser.add_argument("--no_plot", action="store_true", help="skip PNG generation")
     parser.add_argument("--seed", default=42, type=int)
     args = parser.parse_args()
+
+    # 固定随机种子：保证策略网络初始化、动作采样、探索抽样和 batch 打乱都可复现。
+    # 数据切分的随机性由 DataConfig(seed=...) 单独控制，两者用同一个 --seed。
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     device = get_device(args.device)
     ppo_device = get_device(args.ppo_device)
