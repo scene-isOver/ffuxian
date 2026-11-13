@@ -265,12 +265,20 @@ def ppo_update(policy: ActorCritic, optimizer: torch.optim.Optimizer,
 # ===================== 训练主循环 =====================
 # 每个 epoch 打乱样本 → 切 batch → 采样轨迹 → PPO 更新，最后汇总并打印每轮统计。
 def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfig,
-              log=print) -> Tuple[ActorCritic, List[Dict[str, float]]]:
+              log=print, val_env=None
+              ) -> Tuple[ActorCritic, List[Dict[str, float]]]:
+    """``val_env`` 提供时，每轮结束在验证集上贪心评估一次，只保留验证 F1
+    最高的那一版权重；训练结束后回滚到这一版，避免 PPO 后期震荡把已经学好
+    的策略带坏。``val_env`` 为 None 时行为与原来完全一致（返回最后一轮）。
+    """
     policy = ActorCritic(env.obs_dim, env.action_dim, cfg.hidden_dim).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.lr)
 
     n_samples = env.probs.shape[0]
     history: List[Dict[str, float]] = []
+    best_f1 = -1.0
+    best_epoch = 0
+    best_state = None
     for epoch in range(cfg.epochs):
         perm = torch.randperm(n_samples)
         batch_stats: List[Dict[str, float]] = []
@@ -304,6 +312,30 @@ def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfi
                 epoch_stats["loss"], epoch_stats["policy_loss"],
                 epoch_stats["value_loss"], epoch_stats["entropy"],
                 epoch_stats["aux_ce"]))
+
+        # 最佳 epoch 选择：用贪心策略在验证集上评估，记录 F1 最高的那一版权重
+        if val_env is not None:
+            val_metrics = evaluate_policy(policy, val_env, device)
+            epoch_stats["val_f1"] = float(val_metrics["f1"])
+            epoch_stats["val_accuracy"] = float(val_metrics["accuracy"])
+            epoch_stats["val_avg_calls"] = float(val_metrics["avg_classifiers"])
+            is_best = epoch_stats["val_f1"] > best_f1
+            if is_best:
+                best_f1 = epoch_stats["val_f1"]
+                best_epoch = epoch + 1
+                best_state = {
+                    k: v.detach().cpu().clone()
+                    for k, v in policy.state_dict().items()
+                }
+            log("            val: f1={:.4f} acc={:.4f} calls={:.2f}{}".format(
+                epoch_stats["val_f1"], epoch_stats["val_accuracy"],
+                epoch_stats["val_avg_calls"], "  <- best" if is_best else ""))
+
+    # 回滚到验证 F1 最高的那一轮
+    if best_state is not None:
+        policy.load_state_dict(best_state)
+        history[-1]["selected_epoch"] = best_epoch
+        history[-1]["selected_val_f1"] = best_f1
     return policy, history
 
 

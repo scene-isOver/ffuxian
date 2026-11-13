@@ -128,6 +128,9 @@ def main():
                         help="confidence gate of the PPO action mask")
     parser.add_argument("--stage2_priority", default="bert,tke_bert,roberta_fusion",
                         help="Stage 2 判定优先级：第一个是主判定模型，其后是灰区参考模型")
+    parser.add_argument("--select_split", default="dev",
+                        choices=["dev", "ppo_train", "none"],
+                        help="用哪个 split 挑选最佳 epoch 权重；none = 直接返回最后一轮")
     parser.add_argument("--force_scores", action="store_true")
     parser.add_argument("--no_plot", action="store_true", help="skip PNG generation")
     parser.add_argument("--seed", default=42, type=int)
@@ -178,13 +181,32 @@ def main():
                               throughput_scale=args.throughput_scale)
     static_cfg = StaticConfig(confidence_threshold=args.confidence_threshold)
 
+    # 3b) 构造验证环境：每个 epoch 结束用它挑验证 F1 最高的权重快照。
+    #     默认用 clf_dev（不参与 PPO 训练，且已有打分缓存，不会重跑分类器）。
+    val_env = None
+    if args.select_split != "none":
+        select_name = "clf_dev" if args.select_split == "dev" else "ppo_train"
+        if select_name == "ppo_train":
+            select_scores = ppo_scores
+        else:
+            select_scores = score_split(specs, splits[select_name], select_name,
+                                        device, args.force_scores)
+        val_env = PPOEnv(select_scores["probs"], select_scores["labels"],
+                         select_scores["latencies"], reward_cfg,
+                         stage1_idx=s1, stage2_idx=s2,
+                         max_steps=ppo_cfg.max_steps, threshold=args.threshold,
+                         stage2_priority=stage2_priority)
+        print(f"Best-epoch selection split: {select_name} "
+              f"(n={len(select_scores['labels'])})")
+
     train_env = PPOEnv(ppo_scores["probs"], ppo_scores["labels"],
                        ppo_scores["latencies"], reward_cfg,
                        stage1_idx=s1, stage2_idx=s2,
                        max_steps=ppo_cfg.max_steps, threshold=args.threshold,
                        stage2_priority=stage2_priority)
     # 4) 训练 PPO 策略（环境基于训练集概率，5 个分类器全程冻结）
-    policy, history = train_ppo(train_env, ppo_cfg, ppo_device, reward_cfg)
+    policy, history = train_ppo(train_env, ppo_cfg, ppo_device, reward_cfg,
+                                val_env=val_env)
 
     PPO_DIR.mkdir(parents=True, exist_ok=True)
     torch.save({
@@ -198,6 +220,8 @@ def main():
         "ppo_config": asdict(ppo_cfg),
         "reward_config": asdict(reward_cfg),
         "threshold": args.threshold,
+        "stage2_priority": stage2_priority,
+        "select_split": args.select_split,
         "history": history,
     }, PPO_DIR / "policy.pt")
 
