@@ -30,6 +30,9 @@ from transformers import AutoTokenizer
 
 from .config import CACHE_DIR, LEXICON_DIR, DataConfig, resolve_model_name
 
+# ===================== 词典与清洗 =====================
+# 五份词典文件对应“通用 / LGBT / 地域 / 性别歧视 / 种族歧视”五个毒性子类，
+# 文件里存的是 token id 序列而不是字符串，所以匹配直接对 input_ids 做。
 LEXICON_FILES = ("general.json", "LGBT.json", "region.json", "sexism.json", "racism.json")
 
 
@@ -38,6 +41,7 @@ def _read_json(path: Path) -> List[dict]:
         return json.load(f)
 
 
+# 单条记录清洗：去空白 / 去太短 / 去完全重复 / 丢非法标签，只保留 0-1 二分类。
 def _clean(records: List[dict], min_chars: int) -> List[dict]:
     cleaned: List[dict] = []
     seen = set()
@@ -59,6 +63,9 @@ def _clean(records: List[dict], min_chars: int) -> List[dict]:
     return cleaned
 
 
+# ===================== 数据切分 =====================
+# 先把 test 里与 train 重复的文本剔除（防泄漏），再从 train 按分层抽样切出
+# clf_dev（验证集，用于早停）和 ppo_train（策略训练集），剩下的作为 clf_train。
 def build_splits(cfg: DataConfig) -> Dict[str, list]:
     """Return clf_train / clf_dev / ppo_train / test (already cleaned)."""
     from sklearn.model_selection import train_test_split
@@ -97,6 +104,7 @@ def build_splits(cfg: DataConfig) -> Dict[str, list]:
     }
 
 
+# 打印四个划分的样本量与有毒/无毒分布，确认切分没有失衡。
 def print_split_stats(splits: Dict[str, list]) -> None:
     print("Dataset split (cleaned):")
     for name in ("clf_train", "clf_dev", "ppo_train", "test"):
@@ -107,6 +115,9 @@ def print_split_stats(splits: Dict[str, list]) -> None:
 
 # ------------------------------------------------------------ knowledge ids ----
 
+# ===================== TKE-BERT 的知识 id =====================
+# ToxicLexicon 把五份词典加载成“首 token -> 候选词”的索引，
+# 再对一句话扫描出每个 token 命中哪个毒性子类（0 表示未命中）。
 class ToxicLexicon:
     """Fast matcher from BERT token ids to the five ToxiCN lexicon categories.
 
@@ -153,6 +164,7 @@ def build_stance_ids(input_ids: List[int]) -> List[int]:
 
 # --------------------------------------------------------------- tokenising ---
 
+# ===================== 分词与缓存 =====================
 def get_tokenizer(model_name: str):
     # ``use_fast=True`` is much faster for the Chinese BERT/RoBERTa tokenizers.
     # ``resolve_model_name`` maps HF ids / checkpoint names onto MODEL_ROOT and
@@ -161,6 +173,7 @@ def get_tokenizer(model_name: str):
         resolve_model_name(model_name), use_fast=True, local_files_only=True)
 
 
+# 分词结果缓存键：tokenizer 名 + max_len + 是否要知识 id，三者相同才复用。
 def _cache_path(split_name: str, tokenizer_name: str, max_len: int,
                 knowledge: bool) -> Path:
     key = hashlib.md5(
@@ -169,6 +182,8 @@ def _cache_path(split_name: str, tokenizer_name: str, max_len: int,
     return CACHE_DIR / f"{split_name}_{key}.pt"
 
 
+# 把一个 split 整体分词成张量并缓存到 artifacts/cache；
+# knowledge=True 时额外生成 toxic_ids / stance_ids 两路知识 id。
 def encode_split(records: List[dict], tokenizer, split_name: str,
                  max_len: int, use_cache: bool = True,
                  knowledge: bool = False) -> Dict[str, torch.Tensor]:
@@ -210,6 +225,8 @@ def encode_split(records: List[dict], tokenizer, split_name: str,
     return tensors
 
 
+# 训练用的 Dataset 包装：按索引返回 input_ids / attention_mask / labels，
+# 有知识 id 时一并带上（DataLoader 负责组 batch）。
 class EncodedDataset(Dataset):
     def __init__(self, tensors: Dict[str, torch.Tensor]):
         self.tensors = tensors

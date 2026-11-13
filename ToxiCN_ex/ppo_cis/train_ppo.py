@@ -34,6 +34,8 @@ METHOD_COLUMNS = ["accuracy", "precision", "recall", "f1",
                   "avg_classifiers", "avg_latency_ms", "throughput"]
 
 
+# 打印对比表：方法 / Acc / Prec / Rec / F1 / 调用数 / 延迟 / 吞吐。
+# 终端宽度不够时数字会折行，完整表格见 ppo_cis_results.md。
 def print_table(results: Dict[str, Dict[str, float]]) -> None:
     header = "{:<24s}{:>9s}{:>9s}{:>9s}{:>9s}{:>8s}{:>12s}{:>12s}".format(
         "Method", "Acc", "Prec", "Rec", "F1", "Calls", "Lat(ms)", "Throughput")
@@ -47,6 +49,7 @@ def print_table(results: Dict[str, Dict[str, float]]) -> None:
             metrics.get("throughput", 0)))
 
 
+# 生成 Markdown 版结果表：上半部分是 5 个分类器明细，下半部分是测试集方法对比。
 def write_markdown(results: Dict[str, Dict[str, float]], classifier_metrics: Dict,
                    specs, path) -> None:
     stage_by_name = {spec.name: spec.stage for spec in specs}
@@ -87,6 +90,8 @@ def write_markdown(results: Dict[str, Dict[str, float]], classifier_metrics: Dic
         f.write("\n".join(lines) + "\n")
 
 
+# ===================== 主流程 =====================
+# 数据切分 → 冻结打分 → 训练 PPO → 测试评估 → 静态基线对比 → 落盘 CSV/MD/JSON/PNG
 def main():
     parser = argparse.ArgumentParser(
         description="Train PPO-CIS on the two-stage ToxiCN cascade")
@@ -128,6 +133,7 @@ def main():
     ppo_device = get_device(args.ppo_device)
     print(f"Classifier device: {device}; PPO device: {ppo_device}")
 
+    # 1) 清洗并切分数据：clf_train / clf_dev / ppo_train / test
     data_cfg = DataConfig(max_len=args.max_len, seed=args.seed)
     splits = build_splits(data_cfg)
     print_split_stats(splits)
@@ -139,11 +145,13 @@ def main():
     print(f"Stage 1: {[specs[i].name for i in s1]}")
     print(f"Stage 2: {[specs[i].name for i in s2]}")
 
+    # 2) 用冻结分类器给 ppo_train 和 test 打分（有缓存则复用，--force_scores 强制重算）
     ppo_scores = score_split(specs, splits["ppo_train"], "ppo_train", device,
                              args.force_scores)
     test_scores = score_split(specs, splits["test"], "test", device,
                               args.force_scores)
 
+    # 3) 组装配置：PPO 超参、奖励参数、静态基线阈值
     ppo_cfg = PPOConfig(epochs=args.epochs, batch_size=args.batch_size,
                         update_epochs=args.update_epochs, clip=args.clip, lr=args.lr,
                         aux_coef=args.aux_coef, entropy_coef=args.entropy_coef,
@@ -157,6 +165,7 @@ def main():
                        ppo_scores["latencies"], reward_cfg,
                        stage1_idx=s1, stage2_idx=s2,
                        max_steps=ppo_cfg.max_steps, threshold=args.threshold)
+    # 4) 训练 PPO 策略（环境基于训练集概率，5 个分类器全程冻结）
     policy, history = train_ppo(train_env, ppo_cfg, ppo_device, reward_cfg)
 
     PPO_DIR.mkdir(parents=True, exist_ok=True)
@@ -178,8 +187,10 @@ def main():
                       test_scores["latencies"], reward_cfg,
                       stage1_idx=s1, stage2_idx=s2,
                       max_steps=ppo_cfg.max_steps, threshold=args.threshold)
+    # 5) 在测试集上用贪心策略评估 PPO-CIS
     ppo_metrics = evaluate_policy(policy, test_env, ppo_device)
 
+    # 6) 计算全部静态基线，并把 PPO-CIS 一起放进对比表
     results = static_baselines(test_scores["probs"], test_scores["labels"],
                                test_scores["latencies"],
                                [spec.name for spec in specs], static_cfg,
@@ -194,6 +205,7 @@ def main():
     if metrics_path.exists():
         classifier_metrics = load_json(metrics_path)
 
+    # 7) 汇总数据统计、配置、训练曲线和结果，写出 JSON / CSV / MD / PNG
     payload = {
         "data": splits["stats"],
         "stage1": [specs[i].name for i in s1],

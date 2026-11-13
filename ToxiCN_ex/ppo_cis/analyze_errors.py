@@ -26,6 +26,9 @@ import numpy as np
 SCORE_DIR = Path(__file__).resolve().parent / "artifacts" / "scores"
 
 
+# ===================== 指标与数据读取 =====================
+# 手写二分类指标（TP/FP/FN/TN → Acc/Prec/Rec/F1），这样脚本只依赖 numpy，
+# 不需要 torch / GPU 就能跑。
 def _metrics(pred: np.ndarray, label: np.ndarray):
     """手写二分类指标，避免依赖 torch / sklearn。"""
     tp = int(((pred == 1) & (label == 1)).sum())
@@ -39,6 +42,7 @@ def _metrics(pred: np.ndarray, label: np.ndarray):
     return acc, prec, rec, f1
 
 
+# 读取 score_split 缓存的 (N, K) 概率矩阵、标签和模型名；缺文件时提示怎么生成。
 def load_scores(split: str):
     path = SCORE_DIR / f"{split}.npz"
     if not path.exists():
@@ -49,6 +53,8 @@ def load_scores(split: str):
     return data["probs"], data["labels"], [str(n) for n in data["names"]]
 
 
+# ===================== 主分析流程 =====================
+# 概率按阈值离散成 0/1，再构造 (N, K) 的错误矩阵，后续所有分析都在它上面做。
 def main():
     parser = argparse.ArgumentParser(description="五个分类器的错误相关性分析")
     parser.add_argument("--split", default="test", choices=["test", "ppo_train"],
@@ -59,6 +65,7 @@ def main():
 
     probs, labels, names = load_scores(args.split)
     preds = (probs >= args.tau).astype(int)
+    # 错误矩阵：值为 1 表示这个分类器在这条样本上判错。
     errors = (preds != labels[:, None]).astype(float)      # N × K
     n, k = errors.shape
 
@@ -85,6 +92,7 @@ def main():
     for i, name in enumerate(names):
         print(f"{name:<18}" + "".join(f"{corr[i, j]:>10.3f}" for j in range(k)))
 
+    # 只保留非对角元素，得到模型之间“错得有多像”的平均值和最大值。
     off_diag = corr[~np.eye(k, dtype=bool)]
     print(f"\n非对角平均相关: {off_diag.mean():.3f}    最大: {off_diag.max():.3f}")
 

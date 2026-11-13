@@ -28,6 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+# ===================== 路径常量 =====================
+# 所有产物统一落在 ppo_cis/artifacts 下：classifiers（权重）/ scores（打分缓存）
+# / ppo（策略）/ cache（分词缓存）/ reports（结果表与图）。
 PACKAGE_DIR = Path(__file__).resolve().parent
 TOXICN_EX_DIR = PACKAGE_DIR.parent
 DATA_DIR = TOXICN_EX_DIR / "ToxiCN" / "data"
@@ -55,6 +58,8 @@ REPORT_DIR = ARTIFACT_DIR / "reports"
 # The placeholder below is deliberately fake.  Set the environment variable
 # PPO_CIS_MODEL_ROOT (or edit this line) before running, or pass explicit paths
 # through --bert_model / --roberta_model / --tiny_bert_model / --distil_roberta_model.
+# 四个预训练模型的本地根目录（只读本地，不联网下载）。
+# 可用环境变量 PPO_CIS_MODEL_ROOT 或命令行参数覆盖。
 MODEL_ROOT = Path(os.environ.get("PPO_CIS_MODEL_ROOT", "D:/models/ppo_cis_models"))
 
 BERT_MODEL_NAME = os.environ.get(
@@ -66,10 +71,13 @@ TINY_BERT_MODEL_NAME = os.environ.get(
 DISTIL_ROBERTA_MODEL_NAME = os.environ.get(
     "PPO_CIS_DISTIL_ROBERTA_MODEL", str(MODEL_ROOT / "chinese_roberta_L-4_H-256"))
 
+# 判定“目录里确实有权重”时依次尝试的权重文件名。
 _WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin", "tf_model.h5",
                  "flax_model.msgpack")
 
 
+# 把 HF 模型名或裸目录名解析成真实本地目录；
+# 目录 / config.json / 权重文件任缺一项就报错，避免静默退回联网下载。
 def resolve_model_name(name: str) -> str:
     """Map a model name to a local directory, never to the HuggingFace hub.
 
@@ -99,6 +107,8 @@ def resolve_model_name(name: str) -> str:
     return str(candidate)
 
 
+# ===================== 数据切分配置 =====================
+# clf_train 训练分类器，clf_dev 早停，ppo_train 训练策略，test 只做最终评估。
 @dataclass
 class DataConfig:
     train_json: Path = DATA_DIR / "train.json"
@@ -110,6 +120,8 @@ class DataConfig:
     min_chars: int = 2
 
 
+# ===================== 分类器规格 =====================
+# 一个 spec 描述一个分类器：架构、所属阶段、骨干模型、训练超参、是否用知识嵌入。
 @dataclass
 class ClassifierSpec:
     name: str
@@ -126,6 +138,8 @@ class ClassifierSpec:
     use_knowledge: bool = False    # TKE-BERT: feed toxic_ids / stance_ids
 
 
+# 五个分类器的完整定义：stage 1 两个小模型负责快速筛掉无毒样本，
+# stage 2 三个大模型负责最终判定。顺序即 K 维概率向量的列顺序。
 def default_classifier_specs(bert_model: Optional[str] = None,
                              roberta_model: Optional[str] = None,
                              tiny_bert_model: Optional[str] = None,
@@ -167,6 +181,7 @@ def default_classifier_specs(bert_model: Optional[str] = None,
     ]
 
 
+# 按 stage 字段拆出两组下标，PPO 环境据此区分 Stage 1 / Stage 2 的可选动作。
 def stage_indices(specs: Sequence[ClassifierSpec]) -> Tuple[List[int], List[int]]:
     """Return (stage-1 indices, stage-2 indices) for the environment."""
     stage1 = [i for i, spec in enumerate(specs) if spec.stage == 1]
@@ -176,6 +191,7 @@ def stage_indices(specs: Sequence[ClassifierSpec]) -> Tuple[List[int], List[int]
     return stage1, stage2
 
 
+# 训练前一次性检查四份预训练权重，缺哪个全部列出来，避免训到一半才失败。
 def validate_classifier_models(specs: Sequence[ClassifierSpec]) -> None:
     """Fail before training starts, listing every model that is missing.
 
@@ -193,6 +209,8 @@ def validate_classifier_models(specs: Sequence[ClassifierSpec]) -> None:
             "Missing pretrained models:\n\n" + "\n\n".join(problems))
 
 
+# ===================== PPO / 奖励 / 基线配置 =====================
+# 超参默认值已按本数据集调过（网格 64、batch 256、lr 1e-3、更新 10 次）。
 @dataclass
 class PPOConfig:
     """Values follow Table 5 of the PPO-CIS paper where applicable."""
@@ -213,6 +231,8 @@ class PPOConfig:
     max_steps: int = 8             # 2 stage-1 calls + escalate + 3 stage-2 calls + decision
 
 
+# 奖励配置：r / iota 是分类奖励，u / phi / theta 是时间奖励；
+# throughput_scale 默认 0，表示 Eq.(6) 只作报告指标、不进入训练信号。
 @dataclass
 class RewardConfig:
     """奖励项，对应论文 Eq. (1)-(6)，并做了两处必要的尺度修正。
@@ -237,6 +257,7 @@ class RewardConfig:
     eps: float = 1e-6
 
 
+# 固定阈值级联（static_cascade 基线）使用的置信度阈值 xi。
 @dataclass
 class StaticConfig:
     confidence_threshold: float = 0.70   # xi for the fixed-threshold cascade baseline

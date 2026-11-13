@@ -30,6 +30,8 @@ from .utils import compute_metrics, forward_classifier
 
 # ---------------------------------------------------------------- scoring -----
 
+# ===================== 分类器加载与打分 =====================
+# 从 artifacts/classifiers/<name>.pt 还原模型与规格，设为 eval 模式（冻结，不参与训练）
 def load_classifier(name: str, device: torch.device):
     path = CLASSIFIER_DIR / f"{name}.pt"
     if not path.exists():
@@ -44,6 +46,8 @@ def load_classifier(name: str, device: torch.device):
     return model.to(device).eval(), ckpt
 
 
+# 用冻结的分类器给整个 split 打分，得到 (N, K) 的毒性概率矩阵；
+# 结果缓存到 artifacts/scores/<split>.npz，模型名一致就复用（注意：不校验样本数）。
 @torch.no_grad()
 def score_split(specs: Sequence[ClassifierSpec], records: List[dict], split_name: str,
                 device: torch.device, force: bool = False) -> Dict[str, np.ndarray]:
@@ -84,6 +88,7 @@ def score_split(specs: Sequence[ClassifierSpec], records: List[dict], split_name
 
 # --------------------------------------------------------------- baselines ----
 
+# 统一指标口径：Acc/Prec/Rec/F1 + 平均调用数 + 平均延迟(ms) + 吞吐（样本/秒）
 def _metrics(preds: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
              calls: np.ndarray) -> Dict[str, float]:
     metrics = compute_metrics(preds, labels)
@@ -93,6 +98,8 @@ def _metrics(preds: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
     return metrics
 
 
+# ===================== 静态基线 =====================
+# 依次算：5 个单分类器、顺序调用、固定阈值级联、多数投票、软投票，用于和 PPO-CIS 对比。
 def static_baselines(probs: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
                      names: Sequence[str], cfg: StaticConfig,
                      stage1_idx: Sequence[int], stage2_idx: Sequence[int]
@@ -110,6 +117,8 @@ def static_baselines(probs: np.ndarray, labels: np.ndarray, latencies: np.ndarra
         (probs[:, stage2_idx[-1]] >= 0.5).astype(int), labels,
         np.full(n, float(np.sum(latencies))), np.full(n, k))
 
+    # 3) 固定阈值级联（核心基线）：第一阶段高置信无毒直接出口，其余升级；
+    #    第二阶段按同一阈值判定，两阶段都没定论时用大模型均值兜底。
     # 3) fixed-threshold cascade: high-confidence nontoxic exits stage 1,
     #    everything else escalates; stage 2 makes the final decision
     xi = cfg.confidence_threshold
@@ -250,7 +259,6 @@ class PPOEnv:
         这样策略才能学“什么时候跳过剩下的小模型”）。
 
         第二阶段：按同一个阈值做单侧判定——无毒概率达阈值判无毒，否则判有毒。
-        不再保留两个阈值造成的 0.3~0.7 死区，也不会因为“拿不定主意”而空转。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -280,6 +288,7 @@ class PPOEnv:
         return mask
 
     # ------------------------------------------------------------- rewards ----
+    # 终止奖励 = 分类奖励（对 +r，错 -iota*r）+ 本条样本的时间惩罚（-theta*t/u）
     def _terminal_reward(self, i: int, pred: int) -> float:
         label = int(self.cur_labels[i])
         r = self.cfg.correct_reward
@@ -287,6 +296,7 @@ class PPOEnv:
         reward += time_reward(float(self.elapsed[i]), self.cfg)
         return reward
 
+    # 把某条样本标记为结束：结算奖励、记录预测值（每条只结算一次）
     def _terminate(self, i: int, pred: int, rewards: torch.Tensor) -> None:
         if self.done[i]:
             return
@@ -306,6 +316,7 @@ class PPOEnv:
         self._terminate(i, 0 if mean_nontoxic >= self.threshold else 1, rewards)
 
     # ---------------------------------------------------------------- step ----
+    # 执行一步：判定/升级类动作结算或切换阶段；模型类动作记录概率、调用数和延迟。
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         rewards = torch.zeros(self.n)
         for i in range(self.n):
@@ -332,9 +343,11 @@ class PPOEnv:
             # 否则打完两个小模型就再也没有“出口判无毒”的机会。
         return rewards, self.done.clone()
 
+    # 每条样本当前累计的延迟（秒），评估时用来算平均延迟和吞吐
     def sample_latency(self) -> torch.Tensor:
         return self.elapsed.clone()
 
+    # 收尾：对达到 max_steps 仍没判定的样本强制做出判定
     def finalize(self) -> None:
         """Force a decision for any sample left undecided after ``max_steps``."""
         rewards = torch.zeros(self.n)

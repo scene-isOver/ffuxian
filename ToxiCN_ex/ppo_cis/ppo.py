@@ -26,6 +26,9 @@ from .pipeline import throughput_bonus
 from .utils import compute_metrics
 
 
+# ===================== 策略网络 =====================
+# 输入状态（β 向量 + 阶段位），输出动作 logits（非法动作已屏蔽）、状态价值和辅助分类 logits。
+# 主干只服务策略；critic 单独一路网络；辅助头挂在主干预隐藏层上，只在训练时用标签监督。
 class ActorCritic(nn.Module):
     def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 64,
                  num_classes: int = 2):
@@ -44,6 +47,7 @@ class ActorCritic(nn.Module):
         aux_logits = self.aux_head(hidden)
         return logits, value, aux_logits
 
+    # 按当前策略采样一个动作，同时返回 log 概率、状态价值、辅助 logits 和熵
     @torch.no_grad()
     def act(self, state: torch.Tensor, mask: torch.Tensor):
         logits, value, aux_logits = self.forward(state, mask)
@@ -52,6 +56,8 @@ class ActorCritic(nn.Module):
         return action, dist.log_prob(action), value, aux_logits, dist.entropy()
 
 
+# 一次 rollout 的容器：按时间步存放观测、掩码、动作、旧 log 概率、价值、奖励、
+# 终止标志、有效步标志和样本标签，外加整批统计量。维度约定：(T, N, ...)。
 @dataclass
 class Rollout:
     obs: torch.Tensor          # (T, N, S)
@@ -66,6 +72,9 @@ class Rollout:
     stats: Dict[str, float]
 
 
+# ===================== 轨迹采样 =====================
+# 用当前策略把一批样本完整跑一遍（直到全部终止或达到最大步数），
+# 逐步记录状态、掩码、动作、log 概率和价值，供后续 GAE 与 PPO 更新使用。
 @torch.no_grad()
 def collect_rollout(env, policy: ActorCritic, device: torch.device,
                     reward_cfg: RewardConfig, explore_decide: float = 0.0) -> Rollout:
@@ -97,6 +106,8 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
         dist = Categorical(logits=logits)
         sampled = dist.sample()
 
+        # 强制探索：以 explore_decide 的概率把“本该判定”的样本强制走判定动作，
+        # 否则判定动作采样太少、拿不到梯度，策略会退化成“把所有分类器都调一遍”。
         if explore_decide > 0.0:
             decide_ok = mask_v[:, env.K:env.K + 2]
             can_decide = decide_ok.any(dim=1)
@@ -136,6 +147,8 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
     rewards_t = stack(reward_list)
     dones_t = stack(done_list)
 
+    # Eq. (6)：批量吞吐奖励 psi_M = M / sum(t_i)，均摊到每个样本的终止步；
+    # 当前 throughput_scale = 0，这一项不参与训练，只作报告指标。
     # Eq. (6): psi_M = M / sum(t_i) for the rollout batch, distributed evenly
     # across the samples at their terminal step.
     psi = throughput_bonus(float(env.sample_latency().sum()), n, reward_cfg)
@@ -146,6 +159,7 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
     target = torch.where(has_done, first_done, fallback)
     rewards_t[target, torch.arange(n)] += share
 
+    # 整批统计：总奖励、平均调用次数、吞吐 psi、从未升级到第二阶段的样本比例
     stats = {
         "episode_reward": float(rewards_t[stack(valid_list)].sum()),
         "avg_calls": float(env.calls.float().mean()),
@@ -167,6 +181,8 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
     )
 
 
+# ===================== 优势估计（GAE） =====================
+# 从后往前累积 TD 误差得到每一步的优势和回报；终止之后和无效步不参与传播。
 def compute_gae(rewards: torch.Tensor, values: torch.Tensor, dones: torch.Tensor,
                 valid: torch.Tensor, gamma: float, lam: float
                 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -190,6 +206,8 @@ def compute_gae(rewards: torch.Tensor, values: torch.Tensor, dones: torch.Tensor
     return advantages, returns
 
 
+# ===================== PPO-Clip 更新 =====================
+# 对同一批 rollout 反复训练若干轮，目标 = 策略损失 + 价值损失 + 熵奖励 + 辅助交叉熵。
 def ppo_update(policy: ActorCritic, optimizer: torch.optim.Optimizer,
                rollout: Rollout, cfg: PPOConfig) -> Dict[str, float]:
     valid = rollout.valid
@@ -211,11 +229,13 @@ def ppo_update(policy: ActorCritic, optimizer: torch.optim.Optimizer,
         dist = Categorical(logits=logits)
         new_log_probs = dist.log_prob(actions)
 
+        # PPO-Clip 主目标：ratio 为新旧策略概率比，超出 [1-eps, 1+eps] 的部分被截断
         ratio = torch.exp(new_log_probs - old_log_probs)
         surrogate_1 = ratio * advantages
         surrogate_2 = torch.clamp(ratio, 1.0 - cfg.clip, 1.0 + cfg.clip) * advantages
         policy_loss = -torch.min(surrogate_1, surrogate_2).mean()
 
+        # 价值回归 / 熵奖励 / 辅助分类交叉熵（辅助头只在更新时用标签监督，推理不参与）
         value_loss = F.mse_loss(new_values, returns)
         entropy = dist.entropy().mean()
         aux_loss = F.cross_entropy(aux_logits, labels)
@@ -242,6 +262,8 @@ def ppo_update(policy: ActorCritic, optimizer: torch.optim.Optimizer,
     return stats
 
 
+# ===================== 训练主循环 =====================
+# 每个 epoch 打乱样本 → 切 batch → 采样轨迹 → PPO 更新，最后汇总并打印每轮统计。
 def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfig,
               log=print) -> Tuple[ActorCritic, List[Dict[str, float]]]:
     policy = ActorCritic(env.obs_dim, env.action_dim, cfg.hidden_dim).to(device)
@@ -285,6 +307,8 @@ def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfi
     return policy, history
 
 
+# ===================== 评估 =====================
+# 用贪心策略（argmax）跑完整个数据集，输出 Acc/Prec/Rec/F1、平均调用数、延迟和吞吐。
 @torch.no_grad()
 def evaluate_policy(policy: ActorCritic, env, device: torch.device) -> Dict[str, float]:
     """Greedy evaluation over the whole split."""

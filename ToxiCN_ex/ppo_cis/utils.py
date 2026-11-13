@@ -12,6 +12,9 @@ import torch
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 
+# ===================== 指标计算 =====================
+# 全项目唯一的指标入口：传入 0/1 预测和标签，返回 Acc / Prec / Rec / F1 / FNR / FPR。
+# 单分类器、PPO-CIS、各静态基线的准确率都最终走这里，保证口径一致。
 def compute_metrics(preds, labels) -> Dict[str, float]:
     preds = np.asarray(preds).astype(int)
     labels = np.asarray(labels).astype(int)
@@ -25,6 +28,7 @@ def compute_metrics(preds, labels) -> Dict[str, float]:
     }
 
 
+# JSON 落盘 / 读取：metrics.json 与 results.json 都用这一对函数。
 def save_json(obj, path: Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,6 +41,7 @@ def load_json(path: Path):
         return json.load(f)
 
 
+# 统一前向入口：五个分类器的调用签名一致，有 knowledge ids 时一并传入。
 def forward_classifier(model, batch, device) -> torch.Tensor:
     """Run a classifier on one batch, forwarding knowledge ids when present."""
     kwargs = {}
@@ -48,6 +53,8 @@ def forward_classifier(model, batch, device) -> torch.Tensor:
                  batch["attention_mask"].to(device), **kwargs)
 
 
+# ===================== 设备 / 混合精度 =====================
+# get_device 解析 auto/cuda/cpu；amp_context 与 grad_scaler 只在 CUDA 下真正生效。
 def get_device(name: Optional[str] = None) -> torch.device:
     if name and name != "auto":
         return torch.device(name)
@@ -69,6 +76,8 @@ def grad_scaler(device: torch.device):
         return torch.cuda.amp.GradScaler()
 
 
+# 单模型延迟/吞吐测量：先预热 3 个 batch，再最多计时 20 个 batch，
+# 最后按样本数摊薄成单样本延迟（即 metrics.json 里的 latency_sec / throughput）。
 def measure_latency(model, loader, device: torch.device,
                     max_batches: int = 20, warmup_batches: int = 3) -> Dict[str, float]:
     """Measure single-sample latency and throughput with the real batch size."""

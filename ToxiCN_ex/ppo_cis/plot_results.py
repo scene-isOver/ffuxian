@@ -21,10 +21,12 @@ import matplotlib.pyplot as plt
 
 from .config import REPORT_DIR
 
+# 默认读取 train_ppo 写出的 CSV，默认输出到 reports 目录。
 DEFAULT_CSV = REPORT_DIR / "ppo_cis_results.csv"
 DEFAULT_OUT = REPORT_DIR / "ppo_cis_comparison.png"
 
 
+# 读 CSV：抽方法名和 F1 / 平均延迟 / 平均调用数三列，缺值或非数字记为 NaN。
 def load_rows(path: Path) -> Tuple[List[str], List[float], List[float], List[float]]:
     with open(path, "r", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -44,6 +46,7 @@ def load_rows(path: Path) -> Tuple[List[str], List[float], List[float], List[flo
     return methods, column("f1"), column("avg_latency_ms"), column("avg_classifiers")
 
 
+# 画单个柱状图面板：PPO-CIS 用红色突出，其余基线统一蓝色，柱顶标数值。
 def bar_panel(ax, methods: List[str], values: List[float], title: str,
               ylabel: str, fmt: str) -> None:
     colors = ["#d62728" if name == "PPO-CIS" else "#4c72b0" for name in methods]
@@ -59,6 +62,7 @@ def bar_panel(ax, methods: List[str], values: List[float], title: str,
                     fmt.format(value), ha="center", va="bottom", fontsize=8)
 
 
+# 三联图：F1 / 平均延迟 / 平均调用数，保存为 PNG。
 def make_plots(csv_path: Path = DEFAULT_CSV, out_path: Path = DEFAULT_OUT,
                dpi: int = 160) -> Path:
     """Render the three comparison panels and return the PNG path."""

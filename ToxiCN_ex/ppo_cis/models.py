@@ -26,6 +26,8 @@ from transformers import AutoModel, AutoModelForSequenceClassification
 from .config import resolve_model_name
 
 
+# ===================== 公共工具 =====================
+# _base_encoder 从 HF 模型里取出 transformer 主干，_freeze_layers 冻结前 N 层。
 def _base_encoder(model: nn.Module) -> nn.Module:
     """Return the transformer backbone of an HF model (BertModel / RoBERTaModel)."""
     for attr in ("bert", "roberta", "deberta", "electra", "distilbert"):
@@ -48,6 +50,8 @@ def _freeze_layers(model: nn.Module, freeze_layers: int) -> None:
             param.requires_grad = False
 
 
+# ===================== 三种分类器实现 =====================
+# 普通 HF 序列分类器：tiny_bert、distil_roberta、bert 三个都直接用它。
 class TransformerClassifier(nn.Module):
     """HF ``AutoModelForSequenceClassification``, as used by bert-safe-chat/train.py."""
 
@@ -68,6 +72,7 @@ class TransformerClassifier(nn.Module):
         return outputs.logits
 
 
+# RoBERTa + BiGRU + 多尺度 TextCNN：两路特征拼接后过两层全连接（roberta_fusion）。
 class RoBertFusionClassifier(nn.Module):
     """RoBERTa + BiGRU + TextCNN, following CHSD/model.py :: RoBertFusion."""
 
@@ -112,6 +117,7 @@ class RoBertFusionClassifier(nn.Module):
         return self.fc2(self.dropout(hidden))
 
 
+# BERT + 毒性子类 / 立场两路知识嵌入，再经池化 + 两层 FFNN 输出 logits（tke_bert）。
 class TKEBertClassifier(nn.Module):
     """BERT + toxic/stance knowledge embeddings + two-layer FFNN (ToxiCN_ex).
 
@@ -170,6 +176,7 @@ class TKEBertClassifier(nn.Module):
         return self.classifier(self.dropout(hidden))
 
 
+# 工厂函数：按 spec.kind 实例化上面三种架构之一。
 def build_classifier(spec, vocab_size: int = 0, pad_id: int = 0) -> nn.Module:
     """Instantiate a classifier from its ``ClassifierSpec``.
 
