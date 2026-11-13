@@ -124,6 +124,8 @@ def main():
                         help="threshold of the fixed cascade baseline")
     parser.add_argument("--threshold", default=0.70, type=float,
                         help="confidence gate of the PPO action mask")
+    parser.add_argument("--stage2_priority", default="bert,tke_bert,roberta_fusion",
+                        help="Stage 2 判定优先级：第一个是主判定模型，其后是灰区参考模型")
     parser.add_argument("--force_scores", action="store_true")
     parser.add_argument("--no_plot", action="store_true", help="skip PNG generation")
     parser.add_argument("--seed", default=42, type=int)
@@ -145,6 +147,13 @@ def main():
     print(f"Stage 1: {[specs[i].name for i in s1]}")
     print(f"Stage 2: {[specs[i].name for i in s2]}")
 
+    # Stage 2 判定优先级：按名字映射成列下标，未列出的 Stage-2 模型排在最后。
+    name_to_idx = {spec.name: i for i, spec in enumerate(specs)}
+    wanted = [n.strip() for n in args.stage2_priority.split(",") if n.strip()]
+    stage2_priority = [name_to_idx[n] for n in wanted if n in name_to_idx]
+    stage2_priority += [i for i in s2 if i not in stage2_priority]
+    print(f"Stage 2 priority: {[specs[i].name for i in stage2_priority]}")
+
     # 2) 用冻结分类器给 ppo_train 和 test 打分（有缓存则复用，--force_scores 强制重算）
     ppo_scores = score_split(specs, splits["ppo_train"], "ppo_train", device,
                              args.force_scores)
@@ -164,7 +173,8 @@ def main():
     train_env = PPOEnv(ppo_scores["probs"], ppo_scores["labels"],
                        ppo_scores["latencies"], reward_cfg,
                        stage1_idx=s1, stage2_idx=s2,
-                       max_steps=ppo_cfg.max_steps, threshold=args.threshold)
+                       max_steps=ppo_cfg.max_steps, threshold=args.threshold,
+                       stage2_priority=stage2_priority)
     # 4) 训练 PPO 策略（环境基于训练集概率，5 个分类器全程冻结）
     policy, history = train_ppo(train_env, ppo_cfg, ppo_device, reward_cfg)
 
@@ -186,7 +196,8 @@ def main():
     test_env = PPOEnv(test_scores["probs"], test_scores["labels"],
                       test_scores["latencies"], reward_cfg,
                       stage1_idx=s1, stage2_idx=s2,
-                      max_steps=ppo_cfg.max_steps, threshold=args.threshold)
+                      max_steps=ppo_cfg.max_steps, threshold=args.threshold,
+                      stage2_priority=stage2_priority)
     # 5) 在测试集上用贪心策略评估 PPO-CIS
     ppo_metrics = evaluate_policy(policy, test_env, ppo_device)
 

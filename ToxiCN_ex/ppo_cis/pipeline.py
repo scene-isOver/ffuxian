@@ -16,7 +16,7 @@ Environment (two stages, following the paper's MDP):
 """
 from __future__ import annotations
 
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -205,7 +205,8 @@ class PPOEnv:
     def __init__(self, probs: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
                  reward_cfg: RewardConfig, stage1_idx: Sequence[int],
                  stage2_idx: Sequence[int], max_steps: int = 8,
-                 threshold: float = 0.7):
+                 threshold: float = 0.7,
+                 stage2_priority: Optional[Sequence[int]] = None):
         self.probs = torch.as_tensor(probs, dtype=torch.float32)
         self.labels = torch.as_tensor(labels, dtype=torch.long)
         self.latencies = torch.as_tensor(latencies, dtype=torch.float32)
@@ -216,6 +217,10 @@ class PPOEnv:
         self.stage2_idx = list(stage2_idx)
         self.max_steps = max_steps
         self.threshold = threshold
+        # Stage 2 判定优先级：rank 越小越优先，第一个是主判定模型。
+        # 默认沿用 stage2_idx 的顺序，train_ppo 会按 --stage2_priority 传入。
+        priority = list(stage2_priority) if stage2_priority else self.stage2_idx
+        self.stage2_rank = {j: r for r, j in enumerate(priority)}
         self.n = 0
 
     # ---------------------------------------------------------- lifecycle ----
@@ -251,6 +256,32 @@ class PPOEnv:
     def _stage_columns(self, i: int) -> List[int]:
         return self.stage1_idx if int(self.stage[i]) == 1 else self.stage2_idx
 
+    # ===================== Stage 2 判定（主模型主导） =====================
+    # 旧实现对所有已调用的 Stage-2 模型取概率均值，弱模型会把强模型拉平。
+    # 新实现按 stage2_rank 选一个主判定模型：
+    #   1) 主模型 p >= threshold      -> 判有毒；
+    #   2) 主模型 p <= 1 - threshold  -> 判无毒；
+    #   3) 落在灰区 (1-threshold, threshold) 时，与下一优先级的已调用模型取平均，
+    #      以 0.5 切开；
+    #   4) 灰区且没有第二个模型可参照 -> 暂不判定，让策略继续调用。
+    # 返回 (pred, decided)；decided=False 表示当前信息不足以做结论。
+    def _stage2_decision(self, i: int, used_cols: Sequence[int]) -> Tuple[int, bool]:
+        order = sorted([j for j in used_cols if j in self.stage2_rank],
+                       key=lambda j: self.stage2_rank[j])
+        if not order:
+            return 0, False
+        p1 = float(self.state[i, order[0]])
+        if p1 >= self.threshold:
+            return 1, True
+        if 1.0 - p1 >= self.threshold:
+            return 0, True
+        if len(order) >= 2:
+            p2 = float(self.state[i, order[1]])
+            return (1 if 0.5 * (p1 + p2) >= 0.5 else 0), True
+        if all(bool(self.used[i, j]) for j in self.stage2_idx):
+            return (1 if p1 >= 0.5 else 0), True
+        return 0, False
+
     def action_mask(self) -> torch.Tensor:
         """返回每条样本当前的合法动作掩码。
 
@@ -258,7 +289,8 @@ class PPOEnv:
         调用过至少一个模型，就允许随时升级到第二阶段（不再要求把第一阶段用满，
         这样策略才能学“什么时候跳过剩下的小模型”）。
 
-        第二阶段：按同一个阈值做单侧判定——无毒概率达阈值判无毒，否则判有毒。
+        第二阶段：由主判定模型（默认 bert）给出结论；只有当它落在灰区时，才用
+        下一优先级的模型做第二意见，避免弱模型参与平均稀释强模型。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -272,19 +304,19 @@ class PPOEnv:
             used_cols = [k for k in cols if bool(self.used[i, k])]
             if not used_cols:
                 continue
-            mean_toxic = float(torch.stack(
-                [self.state[i, k] for k in used_cols]).mean())
-            mean_nontoxic = 1.0 - mean_toxic
 
             if int(self.stage[i]) == 1:
+                mean_toxic = float(torch.stack(
+                    [self.state[i, k] for k in used_cols]).mean())
+                mean_nontoxic = 1.0 - mean_toxic
                 if mean_nontoxic >= self.threshold:
                     mask[i, self.K + 1] = True      # 融合概率可信 -> 判无毒出口
                 mask[i, self.K] = True              # 调用过模型即可升级
             else:
-                if mean_nontoxic >= self.threshold:
-                    mask[i, self.K + 1] = True      # 单侧阈值 -> 判无毒
-                else:
-                    mask[i, self.K] = True          # 其余一律判有毒
+                # 第二阶段：主判定模型说了算，灰区才找第二意见
+                pred, decided = self._stage2_decision(i, used_cols)
+                if decided:
+                    mask[i, self.K if pred == 1 else self.K + 1] = True
         return mask
 
     # ------------------------------------------------------------- rewards ----
@@ -311,6 +343,15 @@ class PPOEnv:
             cols = [k for k in range(self.K) if bool(self.used[i, k])]
         if not cols:
             self._terminate(i, 0, rewards)
+            return
+        if int(self.stage[i]) == 2:
+            pred, decided = self._stage2_decision(i, cols)
+            if not decided:
+                # 灰区且没有第二个模型可参照：退回主模型自己的 0.5，保证一定有结果
+                order = sorted([j for j in cols if j in self.stage2_rank],
+                               key=lambda j: self.stage2_rank[j])
+                pred = 1 if (order and float(self.state[i, order[0]]) >= 0.5) else 0
+            self._terminate(i, pred, rewards)
             return
         mean_nontoxic = 1.0 - float(self.cur_probs[i, cols].mean())
         self._terminate(i, 0 if mean_nontoxic >= self.threshold else 1, rewards)
