@@ -17,4 +17,3 @@ ToxiCN_ex/ppo_cis/__init__.py
 
 ToxiCN_ex/ppo_cis/artifacts/cache
 ToxiCN_ex/ppo_cis/artifacts/classifiers
-ToxiCN_ex/ppo_cis/artifacts/ppo
