@@ -84,6 +84,11 @@ def main() -> None:
                         help="最终报告结果的 split")
     parser.add_argument("--grid", default="0.55:0.85:0.05",
                         help="阈值网格，格式 low:high:step")
+    parser.add_argument("--select_metric", default="accuracy",
+                        choices=("accuracy", "f1"),
+                        help="用来挑最优 τ 的指标，默认 accuracy")
+    parser.add_argument("--min_throughput", default=0.0, type=float,
+                        help="吞吐下限（样本/秒）；只在这些行里挑最优 τ，0 表示不限制")
     parser.add_argument("--ppo_device", default="cpu")
     args = parser.parse_args()
 
@@ -100,21 +105,35 @@ def main() -> None:
     select_scores = load_scores(args.select_split)
     report_scores = load_scores(args.report_split)
 
-    # 在验证集上扫 τ，按 F1 选最优
+    # 在验证集上扫 τ，按 --select_metric 选最优（默认准确率）
+    metric = args.select_metric
     grid = parse_grid(args.grid)
     print_header(f"阈值扫描（选择集 {args.select_split}, "
                  f"N={len(select_scores['labels'])}）")
-    best: Tuple[float, Dict[str, float]] = (grid[0], {"f1": -1.0})
+    rows = []
     for tau in grid:
         env = build_env(select_scores, reward_cfg, tau, ckpt)
         metrics = evaluate_policy(policy, env, device)
         print_row("{:.2f}".format(tau), metrics)
-        if metrics["f1"] > best[1]["f1"]:
-            best = (tau, metrics)
+        rows.append((tau, metrics))
 
-    tau_best = best[0]
-    print("\n最优 τ = {:.2f}（{}(验证) F1 = {:.4f}）".format(
-        tau_best, args.select_split, best[1]["f1"]))
+    # 只在满足吞吐下限的行里挑；全部不满足时退回整张表
+    candidates = [item for item in rows
+                  if args.min_throughput <= 0.0
+                  or item[1]["throughput"] >= args.min_throughput]
+    if candidates:
+        tau_best, best_metrics = max(candidates, key=lambda item: item[1][metric])
+        if args.min_throughput > 0.0:
+            print("\n吞吐下限 {:.1f}：{} / {} 个 τ 满足".format(
+                args.min_throughput, len(candidates), len(rows)))
+    else:
+        tau_best, best_metrics = max(rows, key=lambda item: item[1][metric])
+        print("\n警告：没有 τ 满足吞吐下限 {:.1f}，改为在全部网格中挑最优".format(
+            args.min_throughput))
+
+    print("最优 τ = {:.2f}（{}(验证) {} = {:.4f}, throughput = {:.1f}）".format(
+        tau_best, args.select_split, metric, best_metrics[metric],
+        best_metrics["throughput"]))
 
     # 用同一个策略在报告集上对比：checkpoint 里的默认 τ vs 验证集选出的 τ
     print_header(f"报告集 {args.report_split}（N={len(report_scores['labels'])}）")
