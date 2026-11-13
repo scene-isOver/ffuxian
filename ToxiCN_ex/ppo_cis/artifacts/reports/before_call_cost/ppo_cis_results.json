@@ -1,0 +1,323 @@
+{
+  "data": {
+    "clf_train": {
+      "n": 25647,
+      "toxic": 12686,
+      "nontoxic": 12961
+    },
+    "clf_dev": {
+      "n": 3206,
+      "toxic": 1586,
+      "nontoxic": 1620
+    },
+    "ppo_train": {
+      "n": 3206,
+      "toxic": 1586,
+      "nontoxic": 1620
+    },
+    "test": {
+      "n": 5266,
+      "toxic": 2072,
+      "nontoxic": 3194
+    }
+  },
+  "classifiers": {
+    "bert": {
+      "accuracy": 0.8192176224838588,
+      "precision": 0.7317880794701986,
+      "recall": 0.8532818532818532,
+      "f1": 0.7878787878787878,
+      "fnr": 0.14671814671814673,
+      "fpr": 0.2028804007514089,
+      "loss": 0.635430343810356,
+      "latency_sec": 0.0454352217187477,
+      "latency_ms": 45.4352217187477,
+      "throughput": 22.00935666585237,
+      "measured_samples": 640,
+      "best_epoch": 1,
+      "n_train": 25647,
+      "n_test": 5266,
+      "model_name": "bert-base-chinese"
+    },
+    "_meta": {
+      "loss": "CrossEntropyLoss",
+      "layout": "single-stage: bert + roberta_fusion + tke_bert",
+      "max_len": 96
+    },
+    "roberta_fusion": {
+      "accuracy": 0.8167489555639954,
+      "precision": 0.7291925465838509,
+      "recall": 0.849903474903475,
+      "f1": 0.7849342545130377,
+      "fnr": 0.1500965250965251,
+      "fpr": 0.2047589229805886,
+      "loss": 0.4797464486324426,
+      "latency_sec": 0.04710779187499838,
+      "latency_ms": 47.107791874998384,
+      "throughput": 21.227910717053415,
+      "measured_samples": 640,
+      "best_epoch": 2,
+      "n_train": 25647,
+      "n_test": 5266,
+      "model_name": "hfl/chinese-roberta-wwm-ext"
+    },
+    "tke_bert": {
+      "accuracy": 0.812001519179643,
+      "precision": 0.708076923076923,
+      "recall": 0.8885135135135135,
+      "f1": 0.7880993150684932,
+      "fnr": 0.11148648648648649,
+      "fpr": 0.23763306199123357,
+      "loss": 0.5790410364966795,
+      "latency_sec": 0.04376768945312506,
+      "latency_ms": 43.76768945312506,
+      "throughput": 22.84790475565301,
+      "measured_samples": 1280,
+      "best_epoch": 1,
+      "n_train": 25647,
+      "n_test": 5266,
+      "model_name": "bert-base-chinese"
+    }
+  },
+  "static_config": {
+    "confidence_threshold": 0.9
+  },
+  "ppo_config": {
+    "clip": 0.2,
+    "lr": 0.0003,
+    "gamma": 0.99,
+    "lam": 0.95,
+    "entropy_coef": 0.01,
+    "value_coef": 0.5,
+    "aux_coef": 0.1,
+    "max_grad_norm": 0.5,
+    "batch_size": 256,
+    "epochs": 10,
+    "update_epochs": 4,
+    "hidden_dim": 64,
+    "seed": 42,
+    "max_steps": 4
+  },
+  "reward_config": {
+    "correct_reward": 10.0,
+    "penalty_factor": 2.0,
+    "time_budget": 0.05,
+    "time_phi": 0.0,
+    "time_theta": 1.0,
+    "throughput_scale": 1.0,
+    "time_cap": 10.0,
+    "eps": 1e-06
+  },
+  "ppo_history": [
+    {
+      "loss": 101.7496109008789,
+      "policy_loss": -0.0032920758239924908,
+      "value_loss": 203.39386455829327,
+      "entropy": 1.1588988670935998,
+      "aux_ce": 0.6756099875156696,
+      "clip_fraction": 0.0,
+      "avg_calls": 1.8022253513336182,
+      "episode_reward": 770.2361943171575,
+      "train_accuracy": 0.6289690366158118,
+      "epoch": 1
+    },
+    {
+      "loss": 97.61413985032301,
+      "policy_loss": -0.002392443613364146,
+      "value_loss": 195.1223426231971,
+      "entropy": 1.132190044109638,
+      "aux_ce": 0.6668265461921692,
+      "clip_fraction": 0.0,
+      "avg_calls": 1.9580358450229352,
+      "episode_reward": 1234.598412146935,
+      "train_accuracy": 0.6799431351514963,
+      "epoch": 2
+    },
+    {
+      "loss": 94.90362314077524,
+      "policy_loss": -0.002739066186432655,
+      "value_loss": 189.7021730863131,
+      "entropy": 1.0906010957864614,
+      "aux_ce": 0.6618101734381455,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.123972984460684,
+      "episode_reward": 1518.8834698016826,
+      "train_accuracy": 0.7066859236130347,
+      "epoch": 3
+    },
+    {
+      "loss": 89.99515416071965,
+      "policy_loss": -0.002265366080861825,
+      "value_loss": 179.88404728816107,
+      "entropy": 1.0336843820718618,
+      "aux_ce": 0.6573294538718003,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.2711906249706564,
+      "episode_reward": 1881.7228487454927,
+      "train_accuracy": 0.7476365153606122,
+      "epoch": 4
+    },
+    {
+      "loss": 86.35851229154147,
+      "policy_loss": -0.0021251359632095466,
+      "value_loss": 172.6097130408654,
+      "entropy": 0.973112518970783,
+      "aux_ce": 0.6551216473946204,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.390947910455557,
+      "episode_reward": 2122.419109637921,
+      "train_accuracy": 0.7702263914621793,
+      "epoch": 5
+    },
+    {
+      "loss": 79.55218681922325,
+      "policy_loss": -0.0017638929062881148,
+      "value_loss": 158.99593646709735,
+      "entropy": 0.908615882580097,
+      "aux_ce": 0.650681408552023,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.5456237426170936,
+      "episode_reward": 2510.3380596454326,
+      "train_accuracy": 0.8168367881041306,
+      "epoch": 6
+    },
+    {
+      "loss": 73.49450155404898,
+      "policy_loss": -0.0012852327110102544,
+      "value_loss": 146.8787877009465,
+      "entropy": 0.856412974687723,
+      "aux_ce": 0.649568117581881,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.636893657537607,
+      "episode_reward": 2764.7957388070913,
+      "train_accuracy": 0.8433598234103277,
+      "epoch": 7
+    },
+    {
+      "loss": 68.29281733586238,
+      "policy_loss": -0.001183545861679774,
+      "value_loss": 136.47479248046875,
+      "entropy": 0.8072377305764419,
+      "aux_ce": 0.6467711329460144,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.6909263867598314,
+      "episode_reward": 2900.2513991135816,
+      "train_accuracy": 0.8574824195641738,
+      "epoch": 8
+    },
+    {
+      "loss": 64.05809813279372,
+      "policy_loss": -0.0011863609766945816,
+      "value_loss": 128.00465745192307,
+      "entropy": 0.7606726472194378,
+      "aux_ce": 0.6456083013461187,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.7469817308279185,
+      "episode_reward": 2998.5255220853364,
+      "train_accuracy": 0.8667973234103277,
+      "epoch": 9
+    },
+    {
+      "loss": 58.45421394935021,
+      "policy_loss": -0.0009309683765213077,
+      "value_loss": 116.79567483755258,
+      "entropy": 0.7148190920169537,
+      "aux_ce": 0.6445707587095407,
+      "clip_fraction": 0.0,
+      "avg_calls": 2.801619896521935,
+      "episode_reward": 3121.9989295372598,
+      "train_accuracy": 0.8799915680518517,
+      "epoch": 10
+    }
+  ],
+  "results": {
+    "bert": {
+      "accuracy": 0.8192176224838588,
+      "precision": 0.7317880794701986,
+      "recall": 0.8532818532818532,
+      "f1": 0.7878787878787878,
+      "fnr": 0.14671814671814673,
+      "fpr": 0.2028804007514089,
+      "avg_classifiers": 1.0,
+      "avg_latency_ms": 45.435218811035156,
+      "throughput": 22.009357452392578
+    },
+    "roberta_fusion": {
+      "accuracy": 0.8167489555639954,
+      "precision": 0.7291925465838509,
+      "recall": 0.849903474903475,
+      "f1": 0.7849342545130377,
+      "fnr": 0.1500965250965251,
+      "fpr": 0.2047589229805886,
+      "avg_classifiers": 1.0,
+      "avg_latency_ms": 47.1077880859375,
+      "throughput": 21.22791290283203
+    },
+    "tke_bert": {
+      "accuracy": 0.812001519179643,
+      "precision": 0.708076923076923,
+      "recall": 0.8885135135135135,
+      "f1": 0.7880993150684932,
+      "fnr": 0.11148648648648649,
+      "fpr": 0.23763306199123357,
+      "avg_classifiers": 1.0,
+      "avg_latency_ms": 43.76769256591797,
+      "throughput": 22.847904205322266
+    },
+    "static_sequential": {
+      "accuracy": 0.812001519179643,
+      "precision": 0.708076923076923,
+      "recall": 0.8885135135135135,
+      "f1": 0.7880993150684932,
+      "fnr": 0.11148648648648649,
+      "fpr": 0.23763306199123357,
+      "avg_classifiers": 3.0,
+      "avg_latency_ms": 136.31069660186768,
+      "throughput": 7.336181421776245
+    },
+    "static_early_exit": {
+      "accuracy": 0.8154196733763768,
+      "precision": 0.7165354330708661,
+      "recall": 0.8783783783783784,
+      "f1": 0.7892454466608847,
+      "fnr": 0.12162162162162163,
+      "fpr": 0.22542266750156542,
+      "avg_classifiers": 1.2671857197113559,
+      "avg_latency_ms": 57.65577184975124,
+      "throughput": 17.344317280253605
+    },
+    "majority_vote": {
+      "accuracy": 0.8203570072161033,
+      "precision": 0.7248402555910544,
+      "recall": 0.875965250965251,
+      "f1": 0.7932692307692307,
+      "fnr": 0.12403474903474904,
+      "fpr": 0.21571696931747025,
+      "avg_classifiers": 3.0,
+      "avg_latency_ms": 136.31069660186768,
+      "throughput": 7.336181421776245
+    },
+    "soft_vote": {
+      "accuracy": 0.8207368021268515,
+      "precision": 0.7261427425821972,
+      "recall": 0.874034749034749,
+      "f1": 0.7932544897065265,
+      "fnr": 0.12596525096525096,
+      "fpr": 0.21383844708829056,
+      "avg_classifiers": 3.0,
+      "avg_latency_ms": 136.31069660186768,
+      "throughput": 7.336181421776245
+    },
+    "PPO-CIS": {
+      "accuracy": 0.8207368021268515,
+      "precision": 0.7261427425821972,
+      "recall": 0.874034749034749,
+      "f1": 0.7932544897065265,
+      "fnr": 0.12596525096525096,
+      "fpr": 0.21383844708829056,
+      "avg_classifiers": 3.0,
+      "avg_latency_ms": 136.31069946289062,
+      "throughput": 7.336181163787842
+    }
+  }
+}
