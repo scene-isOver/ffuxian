@@ -1,8 +1,8 @@
-"""在验证集上扫 PPO-CIS 的置信阈值 τ，再用同一个策略报告测试集结果。
+"""扫 PPO-CIS 的置信阈值 τ，打印整张表，用来观察 τ 对准确率与吞吐的影响。
 
-作用：把 τ 的选择放到不参与 PPO 训练的 split（默认 clf_dev）上做，避免用
-测试集挑超参造成的数据泄漏。脚本只读 ``policy.pt`` 和 ``scores/<split>.npz``，
-不加载分类器、不重训 PPO。
+脚本只读 ``policy.pt`` 和 ``scores/<split>.npz``，不加载分类器、不重训 PPO。
+只输出扫表，不自动挑 τ：样本量下准确率的标准误约 0.8~1.3pp，相邻 τ 的
+差异大多落在噪声里，正式结果仍用 checkpoint 中事先固定的 τ。
 
 用法（在 ToxiCN_ex 目录下，先跑过 train_ppo）：
     python -m ppo_cis.sweep_threshold
@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import argparse
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -79,16 +79,11 @@ def main() -> None:
         description="Sweep the PPO-CIS confidence threshold on a validation split")
     parser.add_argument("--policy", default=str(PPO_DIR / "policy.pt"))
     parser.add_argument("--select_split", default="clf_dev",
-                        help="用来挑 τ 的 split（不应是 test）")
+                        help="第一个扫表使用的 split（默认 clf_dev，不参与 PPO 训练）")
     parser.add_argument("--report_split", default="test",
                         help="最终报告结果的 split")
     parser.add_argument("--grid", default="0.55:0.85:0.05",
                         help="阈值网格，格式 low:high:step")
-    parser.add_argument("--select_metric", default="accuracy",
-                        choices=("accuracy", "f1"),
-                        help="用来挑最优 τ 的指标，默认 accuracy")
-    parser.add_argument("--min_throughput", default=0.0, type=float,
-                        help="吞吐下限（样本/秒）；只在这些行里挑最优 τ，0 表示不限制")
     parser.add_argument("--ppo_device", default="cpu")
     args = parser.parse_args()
 
@@ -105,50 +100,28 @@ def main() -> None:
     select_scores = load_scores(args.select_split)
     report_scores = load_scores(args.report_split)
 
-    # 在验证集上扫 τ，按 --select_metric 选最优（默认准确率）
-    metric = args.select_metric
+    # 只打印整张扫表，不做自动挑选：2411/960 条样本上准确率的标准误约 0.8/1.3pp，
+    # 网格内相邻 τ 的差异大多落在噪声里，靠表挑“最优 τ”并不可靠。
     grid = parse_grid(args.grid)
     print_header(f"阈值扫描（选择集 {args.select_split}, "
                  f"N={len(select_scores['labels'])}）")
-    rows = []
     for tau in grid:
         env = build_env(select_scores, reward_cfg, tau, ckpt)
-        metrics = evaluate_policy(policy, env, device)
-        print_row("{:.2f}".format(tau), metrics)
-        rows.append((tau, metrics))
+        print_row("{:.2f}".format(tau), evaluate_policy(policy, env, device))
 
-    # 只在满足吞吐下限的行里挑；全部不满足时退回整张表
-    candidates = [item for item in rows
-                  if args.min_throughput <= 0.0
-                  or item[1]["throughput"] >= args.min_throughput]
-    if candidates:
-        tau_best, best_metrics = max(candidates, key=lambda item: item[1][metric])
-        if args.min_throughput > 0.0:
-            print("\n吞吐下限 {:.1f}：{} / {} 个 τ 满足".format(
-                args.min_throughput, len(candidates), len(rows)))
-    else:
-        tau_best, best_metrics = max(rows, key=lambda item: item[1][metric])
-        print("\n警告：没有 τ 满足吞吐下限 {:.1f}，改为在全部网格中挑最优".format(
-            args.min_throughput))
+    print_header(f"阈值扫描（报告集 {args.report_split}, "
+                 f"N={len(report_scores['labels'])}）")
+    for tau in grid:
+        env = build_env(report_scores, reward_cfg, tau, ckpt)
+        print_row("{:.2f}".format(tau), evaluate_policy(policy, env, device))
 
-    print("最优 τ = {:.2f}（{}(验证) {} = {:.4f}, throughput = {:.1f}）".format(
-        tau_best, args.select_split, metric, best_metrics[metric],
-        best_metrics["throughput"]))
-
-    # 用同一个策略在报告集上对比：checkpoint 里的默认 τ vs 验证集选出的 τ
-    print_header(f"报告集 {args.report_split}（N={len(report_scores['labels'])}）")
     env = build_env(report_scores, reward_cfg, default_tau, ckpt)
-    print_row("{:.2f}*".format(default_tau), evaluate_policy(policy, env, device))
-    env = build_env(report_scores, reward_cfg, tau_best, ckpt)
-    print_row("{:.2f}".format(tau_best), evaluate_policy(policy, env, device))
-    print("\n* 为 checkpoint 中保存的默认 τ")
-
-    final = evaluate_policy(
-        policy, build_env(report_scores, reward_cfg, tau_best, ckpt), device)
-    print("\n选定 τ={:.2f} 在 {} 上的完整指标：".format(tau_best, args.report_split))
+    final = evaluate_policy(policy, env, device)
+    print("\ncheckpoint 默认 τ={:.2f} 在 {} 上的完整指标：".format(
+        default_tau, args.report_split))
     for key in METRIC_KEYS:
         print("  {:<16s}{:.4f}".format(key, final[key]))
-    print("\n要把它写进正式报告，重跑 train_ppo 时加 --threshold {:.2f}".format(tau_best))
+    print("\n* 若要让报告采用其它 τ，重跑 train_ppo 时加 --threshold <tau>")
 
 
 if __name__ == "__main__":

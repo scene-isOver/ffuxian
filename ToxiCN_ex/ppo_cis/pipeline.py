@@ -221,6 +221,10 @@ class PPOEnv:
         # 默认沿用 stage2_idx 的顺序，train_ppo 会按 --stage2_priority 传入。
         priority = list(stage2_priority) if stage2_priority else self.stage2_idx
         self.stage2_rank = {j: r for r, j in enumerate(priority)}
+        # 主判定模型固定为 Stage 2 里优先级最高的那个（默认 bert），不随调用顺序变化。
+        self.stage2_primary = (min(self.stage2_idx,
+                                   key=lambda j: self.stage2_rank.get(j, len(priority)))
+                               if self.stage2_idx else None)
         self.n = 0
 
     # ---------------------------------------------------------- lifecycle ----
@@ -256,27 +260,28 @@ class PPOEnv:
     def _stage_columns(self, i: int) -> List[int]:
         return self.stage1_idx if int(self.stage[i]) == 1 else self.stage2_idx
 
-    # ===================== Stage 2 判定（主模型主导） =====================
-    # 旧实现对所有已调用的 Stage-2 模型取概率均值，弱模型会把强模型拉平。
-    # 新实现按 stage2_rank 选一个主判定模型：
+    # ===================== Stage 2 判定（主模型固定优先） =====================
+    # 主判定模型固定为 stage2_priority 里排名最高的那个（默认 bert），与调用顺序无关：
+    #   0) 主模型还没被调用 -> 不判定，逼策略先把主模型调出来；
     #   1) 主模型 p >= threshold      -> 判有毒；
     #   2) 主模型 p <= 1 - threshold  -> 判无毒；
-    #   3) 落在灰区 (1-threshold, threshold) 时，与下一优先级的已调用模型取平均，
-    #      以 0.5 切开；
-    #   4) 灰区且没有第二个模型可参照 -> 暂不判定，让策略继续调用。
+    #   3) 落在灰区 (1-threshold, threshold) 时，与已调用的参考模型取平均，以 0.5 切开；
+    #   4) 灰区且没有参考模型可参照 -> 暂不判定，让策略继续调用。
     # 返回 (pred, decided)；decided=False 表示当前信息不足以做结论。
     def _stage2_decision(self, i: int, used_cols: Sequence[int]) -> Tuple[int, bool]:
-        order = sorted([j for j in used_cols if j in self.stage2_rank],
-                       key=lambda j: self.stage2_rank[j])
-        if not order:
+        primary = self.stage2_primary
+        if primary is None or not bool(self.used[i, primary]):
             return 0, False
-        p1 = float(self.state[i, order[0]])
+        p1 = float(self.state[i, primary])
         if p1 >= self.threshold:
             return 1, True
         if 1.0 - p1 >= self.threshold:
             return 0, True
-        if len(order) >= 2:
-            p2 = float(self.state[i, order[1]])
+        refs = sorted([j for j in used_cols
+                       if j != primary and j in self.stage2_rank],
+                      key=lambda j: self.stage2_rank[j])
+        if refs:
+            p2 = float(self.state[i, refs[0]])
             return (1 if 0.5 * (p1 + p2) >= 0.5 else 0), True
         if all(bool(self.used[i, j]) for j in self.stage2_idx):
             return (1 if p1 >= 0.5 else 0), True
@@ -347,9 +352,10 @@ class PPOEnv:
         if int(self.stage[i]) == 2:
             pred, decided = self._stage2_decision(i, cols)
             if not decided:
-                # 灰区且没有第二个模型可参照：退回主模型自己的 0.5，保证一定有结果
+                # 灰区且没有第二个模型可参照：优先用主模型自己的 0.5，保证一定有结果
                 order = sorted([j for j in cols if j in self.stage2_rank],
-                               key=lambda j: self.stage2_rank[j])
+                               key=lambda j: (j != self.stage2_primary,
+                                              self.stage2_rank[j]))
                 pred = 1 if (order and float(self.state[i, order[0]]) >= 0.5) else 0
             self._terminate(i, pred, rewards)
             return
