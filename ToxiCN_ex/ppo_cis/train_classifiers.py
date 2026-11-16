@@ -14,9 +14,11 @@ Usage (from the ToxiCN_ex directory):
 from __future__ import annotations
 
 import argparse
+import random
 from dataclasses import asdict
 from typing import Dict
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -234,12 +236,20 @@ def main():
     parser.add_argument("--max_len", default=96, type=int)
     parser.add_argument("--only", nargs="*", default=None)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--seed", default=42, type=int,
+                        help="数据切分、权重初始化、dropout 和 batch 打乱共用的随机种子")
     args = parser.parse_args()
+
+    # 固定随机种子：数据切分、预训练权重之上的分类头初始化、dropout 丢弃和
+    # DataLoader 的 shuffle 都走这几个全局随机数生成器，固定后重训可复现。
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     # 1) 选设备、切分数据并打印四个划分的样本分布。
     device = get_device(args.device)
     print(f"Device: {device}")
-    data_cfg = DataConfig(max_len=args.max_len)
+    data_cfg = DataConfig(max_len=args.max_len, seed=args.seed)
     splits = build_splits(data_cfg)
     print_split_stats(splits)
 
