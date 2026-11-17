@@ -55,11 +55,13 @@ def print_table(results: Dict[str, Dict[str, float]]) -> None:
 def write_markdown(results: Dict[str, Dict[str, float]], classifier_metrics: Dict,
                    specs, path) -> None:
     stage_by_name = {spec.name: spec.stage for spec in specs}
+    stage1_names = ", ".join(f"`{s.name}`" for s in specs if s.stage == 1)
+    stage2_names = ", ".join(f"`{s.name}`" for s in specs if s.stage == 2)
     lines = [
         "# PPO-CIS two-stage cascade — results",
         "",
-        "Stage 1 (throughput): `tiny_bert`, `distil_roberta`. "
-        "Stage 2 (accuracy): `bert`, `roberta_fusion`, `tke_bert`.",
+        f"Stage 1 (throughput): {stage1_names}. "
+        f"Stage 2 (accuracy): {stage2_names}.",
         "",
         "## Classifiers",
         "",
@@ -126,7 +128,7 @@ def main():
                         help="threshold of the fixed cascade baseline")
     parser.add_argument("--threshold", default=0.70, type=float,
                         help="confidence gate of the PPO action mask")
-    parser.add_argument("--stage2_priority", default="bert,tke_bert,roberta_fusion",
+    parser.add_argument("--stage2_priority", default="roberta_plain,bert,tke_bert",
                         help="Stage 2 判定优先级：第一个是主判定模型，其后是灰区参考模型")
     parser.add_argument("--force_scores", action="store_true")
     parser.add_argument("--no_plot", action="store_true", help="skip PNG generation")

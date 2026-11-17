@@ -42,7 +42,12 @@ def load_classifier(name: str, device: torch.device):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     spec = ClassifierSpec(**ckpt["spec"])
     model = build_classifier(spec)
-    model.load_state_dict(ckpt["state_dict"])
+    state = ckpt["state_dict"]
+    # roberta_baseline.py 保存的是 HF 原始权重（key 不含 encoder. 前缀），
+    # 而 build_classifier 返回的是 TransformerClassifier 包装，这里补一次前缀。
+    if spec.kind == "bert" and not any(k.startswith("encoder.") for k in state):
+        state = {f"encoder.{k}": v for k, v in state.items()}
+    model.load_state_dict(state)
     return model.to(device).eval(), ckpt
 
 

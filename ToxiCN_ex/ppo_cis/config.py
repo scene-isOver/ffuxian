@@ -17,9 +17,15 @@ Classifiers:
     tiny_bert        <- BertForSequenceClassification on ckiplab/bert-tiny-chinese
     distil_roberta   <- AutoModelForSequenceClassification on a distilled Chinese RoBERTa
     bert             <- bert-safe-chat/train.py (BertForSequenceClassification)
-    roberta_fusion   <- CHSD/model.py :: RoBertFusion (RoBERTa + BiGRU + TextCNN)
+    roberta_plain    <- AutoModelForSequenceClassification on chinese-roberta-wwm-ext
+                        (纯 12 层 RoBERTa 全量微调，取代 roberta_fusion)
     tke_bert         <- src/BERT.py + src/Models.py (BERT + toxic/stance knowledge
                         embeddings + two-layer FFNN head)
+
+``roberta_fusion``（CHSD/model.py :: RoBertFusion）已从级联池中退役：
+它的 0.7404 是被 ``freeze_layers=8`` + ``dropout=0.5`` 压成准 4 层模型的结果，
+新池改用 ``roberta_plain``（0.8229）。旧权重与旧指标仍保留在 artifacts 里，
+只在对比表中出现，不参与 PPO 决策。
 """
 from __future__ import annotations
 
@@ -48,7 +54,7 @@ REPORT_DIR = ARTIFACT_DIR / "reports"
 # last part of its HuggingFace id:
 #
 #   <MODEL_ROOT>/bert-base-chinese/          (bert + tke_bert share this one)
-#   <MODEL_ROOT>/chinese-roberta-wwm-ext/    (roberta_fusion)
+#   <MODEL_ROOT>/chinese-roberta-wwm-ext/    (roberta_plain)
 #   <MODEL_ROOT>/bert-tiny-chinese/          (tiny_bert, stage 1)
 #   <MODEL_ROOT>/chinese_roberta_L-4_H-256/  (distil_roberta, stage 1)
 #
@@ -168,10 +174,12 @@ def default_classifier_specs(bert_model: Optional[str] = None,
             epochs=3, batch_size=32, lr=2e-5, weight_decay=0.01,
             dropout=0.1, freeze_layers=0, patience=1,
         ),
+        # 纯 RoBERTa：12 层全量微调，超参与 roberta_baseline.py 完全一致，
+        # 因此已有的 roberta_plain.pt 可以直接被级联复用，无需重训。
         ClassifierSpec(
-            name="roberta_fusion", kind="roberta_fusion", stage=2, model_name=roberta,
-            epochs=3, batch_size=32, lr=1e-5, weight_decay=0.001,
-            dropout=0.5, freeze_layers=8, patience=1,
+            name="roberta_plain", kind="bert", stage=2, model_name=roberta,
+            epochs=5, batch_size=32, lr=2e-5, weight_decay=0.01,
+            dropout=0.1, freeze_layers=0, patience=1,
         ),
         ClassifierSpec(
             name="tke_bert", kind="tke_bert", stage=2, model_name=bert,

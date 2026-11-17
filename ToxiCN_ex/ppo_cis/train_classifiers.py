@@ -1,7 +1,7 @@
 """Train the five PPO-CIS classifiers on ToxiCN (two throughput + three accuracy).
 
 Stage 1 (high throughput): ``tiny_bert`` and ``distil_roberta``.
-Stage 2 (high accuracy):   ``bert``, ``roberta_fusion`` and ``tke_bert``.
+Stage 2 (high accuracy):   ``bert``, ``roberta_plain`` and ``tke_bert``.
 
 All five classifiers use the standard cross-entropy loss ``nn.CrossEntropyLoss``
 over two logits (the binary cross-entropy used by the original ToxiCN_ex
@@ -209,7 +209,7 @@ def train_one(spec, splits, tokenizer, device, data_cfg: DataConfig,
     all_metrics[spec.name] = test_metrics
     all_metrics["_meta"] = {
         "loss": "CrossEntropyLoss",
-        "layout": "two-stage: tiny_bert + distil_roberta -> bert + roberta_fusion + tke_bert",
+        "layout": "two-stage: tiny_bert + distil_roberta -> bert + roberta_plain + tke_bert",
         "max_len": max_len,
     }
     save_json(all_metrics, metrics_file)
