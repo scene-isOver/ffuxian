@@ -265,13 +265,19 @@ def ppo_update(policy: ActorCritic, optimizer: torch.optim.Optimizer,
 # ===================== 训练主循环 =====================
 # 每个 epoch 打乱样本 → 切 batch → 采样轨迹 → PPO 更新，最后汇总并打印每轮统计。
 def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfig,
-              log=print) -> Tuple[ActorCritic, List[Dict[str, float]]]:
-    """训练主循环：返回最后一轮策略和每轮统计。"""
+              log=print, val_env=None, val_metric: str = "reward",
+              ) -> Tuple[ActorCritic, List[Dict[str, float]]]:
+    """训练主循环。
+
+    给定 ``val_env`` 时，每轮结束在验证集上做一次贪心评估，按 ``val_metric``
+    （reward / f1 / accuracy）保留最好的一轮策略；没有验证集时返回最后一轮。
+    """
     policy = ActorCritic(env.obs_dim, env.action_dim, cfg.hidden_dim).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.lr)
 
     n_samples = env.probs.shape[0]
     history: List[Dict[str, float]] = []
+    best_score, best_state, best_epoch = float("-inf"), None, 0
     for epoch in range(cfg.epochs):
         perm = torch.randperm(n_samples)
         batch_stats: List[Dict[str, float]] = []
@@ -296,6 +302,26 @@ def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfi
             for key in keys
         }
         epoch_stats["epoch"] = epoch + 1
+
+        # 验证集评估：按 val_metric 选择 epoch，同时记录 acc / f1 / 吞吐。
+        if val_env is not None:
+            val_metrics = evaluate_policy(policy, val_env, device)
+            epoch_stats["val_reward"] = val_metrics["mean_reward"]
+            epoch_stats["val_accuracy"] = val_metrics["accuracy"]
+            epoch_stats["val_f1"] = val_metrics["f1"]
+            epoch_stats["val_throughput"] = val_metrics["throughput"]
+            if val_metric == "f1":
+                score = val_metrics["f1"]
+            elif val_metric == "accuracy":
+                score = val_metrics["accuracy"]
+            else:
+                score = val_metrics["mean_reward"]
+            if score > best_score:
+                best_score = score
+                best_epoch = epoch + 1
+                best_state = {k: v.detach().cpu().clone()
+                              for k, v in policy.state_dict().items()}
+
         history.append(epoch_stats)
         log("PPO epoch {}/{}: reward={:.2f} acc={:.4f} calls={:.2f} "
             "noesc={:.3f} loss={:.4f} pi={:.4f} v={:.4f} H={:.3f} auxCE={:.4f}".format(
@@ -304,8 +330,15 @@ def train_ppo(env, cfg: PPOConfig, device: torch.device, reward_cfg: RewardConfi
                 epoch_stats["no_escalate_rate"],
                 epoch_stats["loss"], epoch_stats["policy_loss"],
                 epoch_stats["value_loss"], epoch_stats["entropy"],
-                epoch_stats["aux_ce"]))
+                epoch_stats["aux_ce"])
+            + ("  val_acc={:.4f} val_f1={:.4f} val_reward={:.3f} val_thr={:.0f}".format(
+                epoch_stats["val_accuracy"], epoch_stats["val_f1"],
+                epoch_stats["val_reward"], epoch_stats["val_throughput"])
+               if val_env is not None else ""))
 
+    if best_state is not None:
+        policy.load_state_dict(best_state)
+        log(f"PPO best epoch by validation {val_metric}: {best_epoch}/{cfg.epochs}")
     return policy, history
 
 
@@ -331,4 +364,6 @@ def evaluate_policy(policy: ActorCritic, env, device: torch.device) -> Dict[str,
     latencies = env.sample_latency().numpy()
     metrics["avg_latency_ms"] = float(latencies.mean() * 1000)
     metrics["throughput"] = float(len(labels) / max(latencies.sum(), 1e-9))
+    # 平均终止奖励：与训练目标同口径，用作验证集上的 epoch 选择标准。
+    metrics["mean_reward"] = float(env.ep_reward.mean())
     return metrics

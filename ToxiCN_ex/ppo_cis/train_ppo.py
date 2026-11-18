@@ -16,6 +16,7 @@ import argparse
 import csv
 import random
 from dataclasses import asdict
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -106,6 +107,13 @@ def main():
     parser.add_argument("--device", default="auto", help="device for classifier inference")
     parser.add_argument("--ppo_device", default="cpu", help="PPO MLP is tiny; cpu is enough")
     parser.add_argument("--max_len", default=96, type=int)
+    parser.add_argument("--train_json", default=None,
+                        help="训练集 JSON 路径（默认 ToxiCN/data/train.json）")
+    parser.add_argument("--test_json", default=None,
+                        help="测试集 JSON 路径（默认 ToxiCN/data/test.json）")
+    parser.add_argument("--val_metric", default="reward",
+                        choices=["reward", "f1", "accuracy"],
+                        help="用 ppo_dev 上的哪个指标选择最佳 epoch")
     parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--batch_size", default=256, type=int)
     parser.add_argument("--update_epochs", default=10, type=int)
@@ -145,8 +153,12 @@ def main():
     ppo_device = get_device(args.ppo_device)
     print(f"Classifier device: {device}; PPO device: {ppo_device}")
 
-    # 1) 清洗并切分数据：clf_train / clf_dev / ppo_train / test
-    data_cfg = DataConfig(max_len=args.max_len, seed=args.seed)
+    # 1) 清洗并切分数据：clf_train / clf_dev / ppo_train / ppo_dev / test
+    data_cfg = DataConfig(max_len=args.max_len, seed=args.seed,
+                          **({"train_json": Path(args.train_json)}
+                             if args.train_json else {}),
+                          **({"test_json": Path(args.test_json)}
+                             if args.test_json else {}))
     splits = build_splits(data_cfg)
     print_split_stats(splits)
 
@@ -164,9 +176,11 @@ def main():
     stage2_priority += [i for i in s2 if i not in stage2_priority]
     print(f"Stage 2 priority: {[specs[i].name for i in stage2_priority]}")
 
-    # 2) 用冻结分类器给 ppo_train 和 test 打分（有缓存则复用，--force_scores 强制重算）
+    # 2) 用冻结分类器给 ppo_train / ppo_dev / test 打分（有缓存则复用，--force_scores 强制重算）
     ppo_scores = score_split(specs, splits["ppo_train"], "ppo_train", device,
                              args.force_scores)
+    ppo_dev_scores = score_split(specs, splits["ppo_dev"], "ppo_dev", device,
+                                 args.force_scores)
     test_scores = score_split(specs, splits["test"], "test", device,
                               args.force_scores)
 
@@ -185,8 +199,21 @@ def main():
                        stage1_idx=s1, stage2_idx=s2,
                        max_steps=ppo_cfg.max_steps, threshold=args.threshold,
                        stage2_priority=stage2_priority)
-    # 4) 训练 PPO 策略（环境基于训练集概率，5 个分类器全程冻结）
-    policy, history = train_ppo(train_env, ppo_cfg, ppo_device, reward_cfg)
+    # 策略验证集：不参与梯度更新，只用于按平均奖励选择 epoch。
+    val_env = PPOEnv(ppo_dev_scores["probs"], ppo_dev_scores["labels"],
+                     ppo_dev_scores["latencies"], reward_cfg,
+                     stage1_idx=s1, stage2_idx=s2,
+                     max_steps=ppo_cfg.max_steps, threshold=args.threshold,
+                     stage2_priority=stage2_priority)
+    # 4) 训练 PPO 策略（5 个分类器全程冻结）
+    policy, history = train_ppo(train_env, ppo_cfg, ppo_device, reward_cfg,
+                                val_env=val_env, val_metric=args.val_metric)
+    ppo_val_metrics = evaluate_policy(policy, val_env, ppo_device)
+    print("PPO validation (best epoch): acc={:.4f} f1={:.4f} calls={:.2f} "
+          "lat={:.2f}ms thr={:.1f}".format(
+              ppo_val_metrics["accuracy"], ppo_val_metrics["f1"],
+              ppo_val_metrics["avg_classifiers"], ppo_val_metrics["avg_latency_ms"],
+              ppo_val_metrics["throughput"]))
 
     PPO_DIR.mkdir(parents=True, exist_ok=True)
     torch.save({
@@ -227,6 +254,11 @@ def main():
     if metrics_path.exists():
         classifier_metrics = load_json(metrics_path)
 
+    # 验证集上表现最好的一轮（train_ppo 返回的就是这一轮权重）。
+    val_key = {"reward": "val_reward", "f1": "val_f1",
+               "accuracy": "val_accuracy"}[args.val_metric]
+    best_epoch = max(history, key=lambda h: h.get(val_key, float("-inf")))["epoch"]
+
     # 7) 汇总数据统计、配置、训练曲线和结果，写出 JSON / CSV / MD / PNG
     payload = {
         "data": splits["stats"],
@@ -237,7 +269,10 @@ def main():
         "ppo_config": asdict(ppo_cfg),
         "reward_config": asdict(reward_cfg),
         "threshold": args.threshold,
+        "val_metric": args.val_metric,
         "ppo_history": history,
+        "ppo_best_epoch": best_epoch,
+        "ppo_val": ppo_val_metrics,
         "results": results,
     }
     REPORT_DIR.mkdir(parents=True, exist_ok=True)

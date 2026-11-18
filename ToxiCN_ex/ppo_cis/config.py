@@ -122,6 +122,7 @@ class DataConfig:
     max_len: int = 96
     val_ratio: float = 0.10        # split off from train.json for classifier validation
     ppo_ratio: float = 0.10        # split off from train.json for PPO training
+    ppo_dev_ratio: float = 0.20    # split off inside the PPO part for policy validation
     seed: int = 42
     min_chars: int = 2
 

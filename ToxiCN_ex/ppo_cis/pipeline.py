@@ -59,14 +59,21 @@ def score_split(specs: Sequence[ClassifierSpec], records: List[dict], split_name
     """Return probs (N, K), labels (N,), latencies (K,), classifier names."""
     out_path = SCORE_DIR / f"{split_name}.npz"
     names = [spec.name for spec in specs]
+    cur_labels = np.array([row["label"] for row in records], dtype=np.int64)
     if out_path.exists() and not force:
         data = np.load(out_path, allow_pickle=True)
-        if list(data["names"]) == names:
+        # 缓存必须同时匹配模型名和标签序列：换数据集/换切分后标签会变，
+        # 只比对模型名会静默复用旧概率，导致评估数据与打印的划分对不上。
+        same_names = list(data["names"]) == names
+        same_labels = (data["labels"].shape == cur_labels.shape
+                       and np.array_equal(data["labels"], cur_labels))
+        if same_names and same_labels:
             return {k: data[k] for k in data.files}
+        print(f"  [cache] {out_path.name} 与当前数据不一致，重新打分")
 
     probs = np.zeros((len(records), len(specs)), dtype=np.float32)
     latencies = np.zeros(len(specs), dtype=np.float32)
-    labels = np.array([row["label"] for row in records], dtype=np.int64)
+    labels = cur_labels
 
     for j, spec in enumerate(specs):
         model, ckpt = load_classifier(spec.name, device)
@@ -245,6 +252,8 @@ class PPOEnv:
         self.pred = torch.full((self.n,), -1, dtype=torch.long)
         self.calls = torch.zeros(self.n, dtype=torch.long)
         self.elapsed = torch.zeros(self.n, dtype=torch.float32)
+        # 每条样本的终止奖励，供验证集按“平均奖励”选择 epoch。
+        self.ep_reward = torch.zeros(self.n, dtype=torch.float32)
         return self.obs()
 
     def obs(self) -> torch.Tensor:
@@ -342,7 +351,9 @@ class PPOEnv:
     def _terminate(self, i: int, pred: int, rewards: torch.Tensor) -> None:
         if self.done[i]:
             return
-        rewards[i] += self._terminal_reward(i, pred)
+        value = self._terminal_reward(i, pred)
+        rewards[i] += value
+        self.ep_reward[i] = value
         self.pred[i] = pred
         self.done[i] = True
 

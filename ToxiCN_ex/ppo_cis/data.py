@@ -67,13 +67,17 @@ def _clean(records: List[dict], min_chars: int) -> List[dict]:
 # 先把 test 里与 train 重复的文本剔除（防泄漏），再从 train 按分层抽样切出
 # clf_dev（验证集，用于早停）和 ppo_train（策略训练集），剩下的作为 clf_train。
 def build_splits(cfg: DataConfig) -> Dict[str, list]:
-    """Return clf_train / clf_dev / ppo_train / test (already cleaned)."""
+    """Return clf_train / clf_dev / ppo_train / ppo_dev / test (already cleaned)."""
     from sklearn.model_selection import train_test_split
 
-    train_rows = _clean(_read_json(cfg.train_json), cfg.min_chars)
-    test_rows = _clean(_read_json(cfg.test_json), cfg.min_chars)
+    train_raw = _read_json(cfg.train_json)
+    test_raw = _read_json(cfg.test_json)
+    train_rows = _clean(train_raw, cfg.min_chars)
+    test_rows = _clean(test_raw, cfg.min_chars)
 
+    # 跨集去重：test 中与 train 完全相同的文本直接丢弃，避免任何形式的泄漏。
     train_texts = {row["text"] for row in train_rows}
+    test_before = len(test_rows)
     test_rows = [row for row in test_rows if row["text"] not in train_texts]
 
     labels = [row["label"] for row in train_rows]
@@ -81,9 +85,17 @@ def build_splits(cfg: DataConfig) -> Dict[str, list]:
     train_part, temp_part = train_test_split(
         train_rows, test_size=temp_size, stratify=labels, random_state=cfg.seed
     )
+    # clf_dev 与 ppo 部分按 val_ratio : ppo_ratio 切；ppo 部分再切出策略验证集。
+    dev_share = cfg.val_ratio / temp_size
     temp_labels = [row["label"] for row in temp_part]
     dev_part, ppo_part = train_test_split(
-        temp_part, test_size=0.5, stratify=temp_labels, random_state=cfg.seed
+        temp_part, test_size=1.0 - dev_share, stratify=temp_labels,
+        random_state=cfg.seed
+    )
+    ppo_labels = [row["label"] for row in ppo_part]
+    ppo_train_part, ppo_dev_part = train_test_split(
+        ppo_part, test_size=cfg.ppo_dev_ratio, stratify=ppo_labels,
+        random_state=cfg.seed
     )
 
     def label_stats(rows):
@@ -93,21 +105,39 @@ def build_splits(cfg: DataConfig) -> Dict[str, list]:
     return {
         "clf_train": train_part,
         "clf_dev": dev_part,
-        "ppo_train": ppo_part,
+        "ppo_train": ppo_train_part,
+        "ppo_dev": ppo_dev_part,
         "test": test_rows,
         "stats": {
+            "dataset": {
+                "train_raw": len(train_raw),
+                "train_clean": len(train_rows),
+                "test_raw": len(test_raw),
+                "test_clean": len(test_rows),
+                "test_dropped_overlap": test_before - len(test_rows),
+            },
             "clf_train": label_stats(train_part),
             "clf_dev": label_stats(dev_part),
-            "ppo_train": label_stats(ppo_part),
+            "ppo_train": label_stats(ppo_train_part),
+            "ppo_dev": label_stats(ppo_dev_part),
             "test": label_stats(test_rows),
         },
     }
 
 
-# 打印四个划分的样本量与有毒/无毒分布，确认切分没有失衡。
+# 打印原始/清洗后的样本量，以及四个划分的分布；顺便校验数据集是否真的换成了 COLD。
 def print_split_stats(splits: Dict[str, list]) -> None:
+    info = splits["stats"].get("dataset")
+    if info:
+        print("Dataset:")
+        print("  train raw={train_raw} cleaned={train_clean} | "
+              "test raw={test_raw} cleaned={test_clean} "
+              "(dropped overlap={test_dropped_overlap})".format(**info))
+        if info["train_clean"] < 20000:
+            print("  [warn] 训练集清洗后不足 20k，可能不是 COLD 32k 数据集；"
+                  "请确认 ToxiCN/data/train.json 已替换为 COLD 版本。")
     print("Dataset split (cleaned):")
-    for name in ("clf_train", "clf_dev", "ppo_train", "test"):
+    for name in ("clf_train", "clf_dev", "ppo_train", "ppo_dev", "test"):
         s = splits["stats"][name]
         print("  {:<10s} n={:<6d} toxic={:<6d} nontoxic={:<6d}".format(
             name, s["n"], s["toxic"], s["nontoxic"]))
@@ -173,11 +203,22 @@ def get_tokenizer(model_name: str):
         resolve_model_name(model_name), use_fast=True, local_files_only=True)
 
 
-# 分词结果缓存键：tokenizer 名 + max_len + 是否要知识 id，三者相同才复用。
+# 数据指纹：样本数 + 首尾各两条的标签与文本。
+# 换数据集或换切分种子后指纹会变，旧分词缓存自动失效，避免静默复用。
+def _records_fingerprint(records: List[dict]) -> str:
+    digest = hashlib.md5()
+    digest.update(str(len(records)).encode("utf-8"))
+    for row in records[:2] + records[-2:]:
+        digest.update(str(row["label"]).encode("utf-8"))
+        digest.update(str(row["text"]).encode("utf-8"))
+    return digest.hexdigest()[:8]
+
+
+# 分词结果缓存键：tokenizer 名 + max_len + 是否要知识 id + 数据指纹，全部相同才复用。
 def _cache_path(split_name: str, tokenizer_name: str, max_len: int,
-                knowledge: bool) -> Path:
+                knowledge: bool, fingerprint: str) -> Path:
     key = hashlib.md5(
-        f"{tokenizer_name}|{max_len}|{int(knowledge)}".encode("utf-8")
+        f"{tokenizer_name}|{max_len}|{int(knowledge)}|{fingerprint}".encode("utf-8")
     ).hexdigest()[:10]
     return CACHE_DIR / f"{split_name}_{key}.pt"
 
@@ -193,7 +234,8 @@ def encode_split(records: List[dict], tokenizer, split_name: str,
     TKE-BERT.
     """
     tokenizer_name = getattr(tokenizer, "name_or_path", "unknown")
-    path = _cache_path(split_name, tokenizer_name, max_len, knowledge)
+    path = _cache_path(split_name, tokenizer_name, max_len, knowledge,
+                       _records_fingerprint(records))
     if use_cache and path.exists():
         return torch.load(path)
 

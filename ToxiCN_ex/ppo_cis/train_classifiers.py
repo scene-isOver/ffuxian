@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import random
 from dataclasses import asdict
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -72,9 +73,14 @@ def train_one(spec, splits, tokenizer, device, data_cfg: DataConfig,
     # 权重已存在时直接读出旧的 test_metrics 返回，保证重复运行不会白跑一遍。
     ckpt_path = CLASSIFIER_DIR / f"{spec.name}.pt"
     if ckpt_path.exists() and not force:
-        print(f"[skip] {spec.name}: {ckpt_path} already exists (use --force to retrain)")
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        return ckpt.get("test_metrics", {})
+        old_n = (ckpt.get("test_metrics") or {}).get("n_train")
+        new_n = len(splits["clf_train"])
+        if old_n == new_n:
+            print(f"[skip] {spec.name}: {ckpt_path} already exists (use --force to retrain)")
+            return ckpt.get("test_metrics", {})
+        # 训练样本数变了说明换了数据集或切分，旧权重不能用，必须重训。
+        print(f"[retrain] {spec.name}: n_train {old_n} -> {new_n}, 数据已变化，重新训练")
 
     # ---- 2) 分词 + DataLoader ----
     # encode_split 内部有缓存，同一 tokenizer/max_len 组合只真正分词一次；
@@ -234,6 +240,10 @@ def main():
                         help="stage-1 distilled RoBERTa model name or local path")
     parser.add_argument("--device", default="auto", help="auto / cuda / cpu")
     parser.add_argument("--max_len", default=96, type=int)
+    parser.add_argument("--train_json", default=None,
+                        help="训练集 JSON 路径（默认 ToxiCN/data/train.json）")
+    parser.add_argument("--test_json", default=None,
+                        help="测试集 JSON 路径（默认 ToxiCN/data/test.json）")
     parser.add_argument("--only", nargs="*", default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--seed", default=42, type=int,
@@ -249,7 +259,11 @@ def main():
     # 1) 选设备、切分数据并打印四个划分的样本分布。
     device = get_device(args.device)
     print(f"Device: {device}")
-    data_cfg = DataConfig(max_len=args.max_len, seed=args.seed)
+    data_cfg = DataConfig(max_len=args.max_len, seed=args.seed,
+                          **({"train_json": Path(args.train_json)}
+                             if args.train_json else {}),
+                          **({"test_json": Path(args.test_json)}
+                             if args.test_json else {}))
     splits = build_splits(data_cfg)
     print_split_stats(splits)
 
