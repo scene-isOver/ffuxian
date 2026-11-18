@@ -98,7 +98,7 @@
       "method": "static_sequential",
       "calls": 1.0,
       "latency_ms": 3.2194294035434723,
-      "throughput": 1635693.5779377443
+      "throughput": 310.61404822213143
     },
     {
       "accuracy": 0.8190277250284846,
@@ -130,7 +130,7 @@
       "method": "majority_vote",
       "calls": 5.0,
       "latency_ms": 3.2194294035434723,
-      "throughput": 1635693.5779377443
+      "throughput": 310.61404822213143
     },
     {
       "accuracy": 0.8192176224838588,
@@ -146,7 +146,7 @@
       "method": "soft_vote",
       "calls": 5.0,
       "latency_ms": 3.2194294035434723,
-      "throughput": 1635693.5779377443
+      "throughput": 310.61404822213143
     },
     {
       "accuracy": 0.8245347512343335,
