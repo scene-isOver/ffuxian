@@ -18,6 +18,7 @@ artifacts/scores/<split>.npz 里已缓存的概率，不重训任何模型，一
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -90,9 +91,10 @@ def static_preds(probs: np.ndarray, latencies: np.ndarray,
     out: Dict[str, tuple] = {}
 
     # 顺序执行：全部调用一遍，用最后一个 Stage-2 模型判定。
+    # 每个样本都要跑全部模型，所以逐样本延迟是"所有模型延迟之和"。
+    total_latency = float(np.sum(latencies))
     seq_pred = (probs[:, stage2_idx[-1]] >= 0.5).astype(int)
-    out["static_sequential"] = (seq_pred, np.ones(n),
-                                float(np.sum(latencies)))
+    out["static_sequential"] = (seq_pred, np.ones(n), np.full(n, total_latency))
 
     # 固定阈值级联：Stage-1 高置信无毒出口，其余升级；Stage-2 同阈值判定。
     cascade_pred = np.zeros(n, dtype=int)
@@ -135,9 +137,9 @@ def static_preds(probs: np.ndarray, latencies: np.ndarray,
     # 多模型投票
     votes = (probs >= 0.5).sum(axis=1)
     out["majority_vote"] = ((votes >= int(np.ceil(k / 2))).astype(int),
-                            np.full(n, float(k)), float(np.sum(latencies)))
+                            np.full(n, float(k)), np.full(n, total_latency))
     out["soft_vote"] = ((probs.mean(axis=1) >= 0.5).astype(int),
-                        np.full(n, float(k)), float(np.sum(latencies)))
+                        np.full(n, float(k)), np.full(n, total_latency))
     return out
 
 
@@ -258,7 +260,23 @@ def main():
     md_path = REPORT_DIR / f"eval_metrics_{args.split}.md"
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    # CSV：与 md 同内容，utf-8-sig 便于 Excel 直接打开。
+    csv_path = REPORT_DIR / f"eval_metrics_{args.split}.csv"
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(list(header))
+        for r in rows:
+            writer.writerow([
+                r["method"], f"{r['accuracy']:.4f}",
+                f"{r['macro_precision']:.4f}", f"{r['macro_recall']:.4f}",
+                f"{r['macro_f1']:.4f}",
+                f"{r['off_precision']:.4f}", f"{r['off_recall']:.4f}", f"{r['off_f1']:.4f}",
+                f"{r['non_precision']:.4f}", f"{r['non_recall']:.4f}", f"{r['non_f1']:.4f}",
+                f"{r['calls']:.2f}", f"{r['latency_ms']:.2f}", f"{r['throughput']:.1f}",
+            ])
+
     print(f"\nSaved: {md_path}")
+    print(f"Saved: {csv_path}")
     print(f"Saved: {json_path}")
 
 
