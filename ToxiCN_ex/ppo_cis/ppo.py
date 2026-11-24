@@ -80,10 +80,11 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
                     reward_cfg: RewardConfig, explore_decide: float = 0.0) -> Rollout:
     """Run one full episode set (``env`` must already be reset).
 
-    ``explore_decide`` forces an early decision on a fraction of the samples
-    where the confidence gate allows it.  Without it the "decide" actions are
-    sampled too rarely to ever get a gradient, and the policy collapses into
-    calling every classifier.
+    ``explore_decide`` picks a uniformly random legal termination action on a
+    fraction of the samples.  Without it the "decide" actions are sampled too
+    rarely to ever get a gradient and the policy collapses into calling every
+    classifier; drawing uniformly (instead of following the threshold rule)
+    keeps the extra samples free of any hand-written policy bias.
     """
     n = env.n
     obs_list, mask_list, action_list, logp_list = [], [], [], []
@@ -106,25 +107,18 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
         dist = Categorical(logits=logits)
         sampled = dist.sample()
 
-        # 强制探索：以 explore_decide 的概率把“本该判定”的样本强制走判定动作，
-        # 否则判定动作采样太少、拿不到梯度，策略会退化成“把所有分类器都调一遍”。
+        # 强制探索：以 explore_decide 的概率在当前合法的判定动作里均匀采样，
+        # 只保证判定动作有样本量、拿得到梯度。这里刻意不按阈值挑动作，
+        # 否则等于把固定级联的行为当作示范喂给策略。
         if explore_decide > 0.0:
             decide_ok = mask_v[:, env.K:env.K + 2]
             can_decide = decide_ok.any(dim=1)
             force_mask = (torch.rand(can_decide.shape, device=device) < explore_decide) & can_decide
             if bool(force_mask.any()):
-                used_mask = state_v >= 0
-                mean_p = ((state_v * used_mask).sum(dim=1)
-                          / used_mask.sum(dim=1).clamp(min=1))
-                prefer = torch.where(
-                    1.0 - mean_p >= env.threshold,
-                    torch.full_like(sampled, env.K + 1),
-                    torch.full_like(sampled, env.K))
-                other = torch.where(prefer == env.K, env.K + 1, env.K)
-                prefer_ok = decide_ok.gather(
-                    1, (prefer - env.K).unsqueeze(1)).squeeze(1)
-                chosen = torch.where(prefer_ok, prefer, other)
-                sampled = torch.where(force_mask, chosen, sampled)
+                idx = force_mask.nonzero(as_tuple=True)[0]
+                legal = decide_ok[idx].float()
+                chosen = torch.multinomial(legal, 1).squeeze(1) + env.K
+                sampled[idx] = chosen
 
         actions[valid] = sampled.cpu()
         log_probs[valid] = dist.log_prob(sampled).cpu()

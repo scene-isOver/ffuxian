@@ -124,8 +124,8 @@ def main():
                         help="weight of the auxiliary cross-entropy loss")
     parser.add_argument("--entropy_coef", default=0.05, type=float,
                         help="entropy bonus; raise it if the policy stops exploring early exits")
-    parser.add_argument("--explore_decide", default=0.10, type=float,
-                        help="fraction of rollouts forced to decide early (anti-collapse)")
+    parser.add_argument("--explore_decide", default=0.05, type=float,
+                        help="fraction of rollouts forced to a uniformly random legal decision")
     parser.add_argument("--time_budget", default=0.0015, type=float,
                         help="u in the time reward, in seconds (1.5 ms reference budget)")
     parser.add_argument("--time_theta", default=0.5, type=float,

@@ -304,12 +304,12 @@ class PPOEnv:
     def action_mask(self) -> torch.Tensor:
         """返回每条样本当前的合法动作掩码。
 
-        第一阶段：只输出“无毒”。融合后的无毒概率达到阈值就允许出口；只要已经
-        调用过至少一个模型，就允许随时升级到第二阶段（不再要求把第一阶段用满，
-        这样策略才能学“什么时候跳过剩下的小模型”）。
+        两个阶段都按原文的动作空间定义：调用本阶段任一尚未使用的分类器，
+        或者直接做出终止判定。第一阶段“判有毒”等价于升级，“判无毒”则结束；
+        只要调用过至少一个模型，两个判定动作就同时开放、由策略自己选，
+        不再用阈值预先筛掉其中一个。
 
-        第二阶段：由主判定模型（默认 bert）给出结论；只有当它落在灰区时，才用
-        下一优先级的模型做第二意见，避免弱模型参与平均稀释强模型。
+        第二阶段：主判定模型被调用后，“判有毒”与“判无毒”两个动作同时开放。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -325,17 +325,17 @@ class PPOEnv:
                 continue
 
             if int(self.stage[i]) == 1:
-                mean_toxic = float(torch.stack(
-                    [self.state[i, k] for k in used_cols]).mean())
-                mean_nontoxic = 1.0 - mean_toxic
-                if mean_nontoxic >= self.threshold:
-                    mask[i, self.K + 1] = True      # 融合概率可信 -> 判无毒出口
-                mask[i, self.K] = True              # 调用过模型即可升级
+                # 对齐原文 A1 = |L1| + 2：调用过模型后，“判无毒”与“升级”
+                # 两个动作都开放，出口时机完全由策略决定。
+                mask[i, self.K] = True
+                mask[i, self.K + 1] = True
             else:
-                # 第二阶段：主判定模型说了算，灰区才找第二意见
-                pred, decided = self._stage2_decision(i, used_cols)
-                if decided:
-                    mask[i, self.K if pred == 1 else self.K + 1] = True
+                # 第二阶段：主判定模型调用过即可判定，两个动作都交给策略选择，
+                # 不再由阈值决定唯一结果——这样策略在第二阶段才有真正的决策空间。
+                if (self.stage2_primary is not None
+                        and bool(self.used[i, self.stage2_primary])):
+                    mask[i, self.K] = True
+                    mask[i, self.K + 1] = True
         return mask
 
     # ------------------------------------------------------------- rewards ----

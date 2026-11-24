@@ -230,7 +230,7 @@ class PPOConfig:
     entropy_coef: float = 0.05     # 0.01 时熵只从 0.770 掉到 0.742，策略几乎不动
     value_coef: float = 0.5
     aux_coef: float = 0.10         # weight of the auxiliary cross-entropy head
-    explore_decide: float = 0.10   # 训练 rollout 中强制提前判定的比例（防塌缩）
+    explore_decide: float = 0.05   # rollout 中均匀强制判定的比例（只补覆盖，不注入规则）
     max_grad_norm: float = 1.0     # 配合 lr=1e-3；0.5 会频繁截断，实际步长上不去
     batch_size: int = 256          # samples per rollout batch
     epochs: int = 10               # full passes over ppo_train
