@@ -343,7 +343,14 @@ class PPOEnv:
     def _terminal_reward(self, i: int, pred: int) -> float:
         label = int(self.cur_labels[i])
         r = self.cfg.correct_reward
-        reward = r if pred == label else -self.cfg.penalty_factor * r
+        if pred == label:
+            reward = r
+        else:
+            # 漏判有毒（FN）比误判无毒（FP）危害更大：原文 Eq.(1) 允许对 FN
+            # 单独加重惩罚，避免策略为了省一次调用而提前判无毒。
+            factor = (self.cfg.fn_penalty_factor if label == 1
+                      else self.cfg.penalty_factor)
+            reward = -factor * r
         reward += time_reward(float(self.elapsed[i]), self.cfg)
         return reward
 

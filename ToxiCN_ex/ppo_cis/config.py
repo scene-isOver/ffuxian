@@ -258,7 +258,8 @@ class RewardConfig:
        ``throughput_scale=0``，只作为报告指标保留。
     """
     correct_reward: float = 1.0       # r
-    penalty_factor: float = 2.0       # iota
+    penalty_factor: float = 2.0       # iota: FP（无毒判成有毒）的惩罚系数
+    fn_penalty_factor: float = 3.5    # FN（有毒判成无毒）单独加重，原文 Eq.(1) 的 iota
     time_budget: float = 0.0015       # u, seconds（1.5 ms 参考预算，见 time_reward）
     time_phi: float = 0.0             # phi
     time_theta: float = 0.5           # theta_1

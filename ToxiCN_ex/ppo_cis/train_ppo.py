@@ -130,6 +130,8 @@ def main():
                         help="u in the time reward, in seconds (1.5 ms reference budget)")
     parser.add_argument("--time_theta", default=0.5, type=float,
                         help="theta_1: weight of the per-sample latency penalty")
+    parser.add_argument("--fn_penalty_factor", default=3.5, type=float,
+                        help="penalty factor for FN (toxic judged nontoxic)")
     parser.add_argument("--throughput_scale", default=0.0, type=float,
                         help="weight of the Eq.(6) batch throughput bonus (report-only when 0)")
     parser.add_argument("--confidence_threshold", default=0.70, type=float,
@@ -191,6 +193,7 @@ def main():
                         explore_decide=args.explore_decide, seed=args.seed)
     reward_cfg = RewardConfig(time_budget=args.time_budget,
                               time_theta=args.time_theta,
+                              fn_penalty_factor=args.fn_penalty_factor,
                               throughput_scale=args.throughput_scale)
     static_cfg = StaticConfig(confidence_threshold=args.confidence_threshold)
 
