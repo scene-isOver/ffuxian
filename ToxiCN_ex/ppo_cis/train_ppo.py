@@ -1,14 +1,20 @@
 """Score with frozen classifiers, train the two-stage PPO-Clip policy, compare.
 
-The output directory ``ppo_cis/artifacts/reports`` receives, after a run:
-    ppo_cis_results.csv    machine-readable comparison table
-    ppo_cis_results.md     Markdown table (readable result file)
-    ppo_cis_results.json   full payload incl. PPO training history
-    ppo_cis_comparison.png F1 / latency / call-count bar chart
+The policy is trained **once** and then evaluated on every test set given via
+``--test_json`` (one or more paths).  Each test set gets its own result files:
+
+    ppo_cis_results_<tag>.csv    machine-readable comparison table
+    ppo_cis_results_<tag>.md     Markdown table (readable result file)
+    ppo_cis_results_<tag>.json   full payload incl. PPO training history
+    ppo_cis_comparison_<tag>.png F1 / latency / call-count bar chart
+
+``<tag>`` is the test file stem without a leading ``test_``, e.g.
+``test_cold.json`` -> ``cold``, ``test_toxicn12k.json`` -> ``toxicn12k``.
 
 Usage (from the ToxiCN_ex directory, after train_classifiers):
     python -m ppo_cis.train_ppo
-    python -m ppo_cis.train_ppo --ppo_device cpu --epochs 10
+    python -m ppo_cis.train_ppo --train_json ../merged/train.json \\
+        --test_json ../merged/test_cold.json ../merged/test_toxicn12k.json
 """
 from __future__ import annotations
 
@@ -27,7 +33,7 @@ from .config import (
     StaticConfig, default_classifier_specs, stage_indices,
     validate_classifier_models,
 )
-from .data import build_splits, print_split_stats
+from .data import build_splits, build_test_split, print_split_stats
 from .pipeline import PPOEnv, score_split, static_baselines
 from .ppo import evaluate_policy, train_ppo
 from .plot_results import make_plots
@@ -35,6 +41,12 @@ from .utils import get_device, load_json, save_json
 
 METHOD_COLUMNS = ["accuracy", "precision", "recall", "f1",
                   "avg_classifiers", "avg_latency_ms", "throughput"]
+
+
+# 结果文件名后缀：test_cold.json -> cold，test_toxicn12k.json -> toxicn12k。
+def _test_tag(path: Path) -> str:
+    stem = Path(path).stem
+    return stem[len("test_"):] if stem.startswith("test_") else stem
 
 
 # 打印对比表：方法 / Acc / Prec / Rec / F1 / 调用数 / 延迟 / 吞吐。
@@ -54,7 +66,7 @@ def print_table(results: Dict[str, Dict[str, float]]) -> None:
 
 # 生成 Markdown 版结果表：上半部分是 5 个分类器明细，下半部分是测试集方法对比。
 def write_markdown(results: Dict[str, Dict[str, float]], classifier_metrics: Dict,
-                   specs, path) -> None:
+                   specs, path, test_tag: str = "") -> None:
     stage_by_name = {spec.name: spec.stage for spec in specs}
     stage1_names = ", ".join(f"`{s.name}`" for s in specs if s.stage == 1)
     stage2_names = ", ".join(f"`{s.name}`" for s in specs if s.stage == 2)
@@ -79,7 +91,7 @@ def write_markdown(results: Dict[str, Dict[str, float]], classifier_metrics: Dic
 
     lines += [
         "",
-        "## Test-set comparison",
+        f"## Test-set comparison ({test_tag})" if test_tag else "## Test-set comparison",
         "",
         "| Method | Acc | Prec | Rec | F1 | Calls | Latency (ms) | Throughput |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -109,8 +121,9 @@ def main():
     parser.add_argument("--max_len", default=96, type=int)
     parser.add_argument("--train_json", default=None,
                         help="训练集 JSON 路径（默认 ToxiCN/data/train.json）")
-    parser.add_argument("--test_json", default=None,
-                        help="测试集 JSON 路径（默认 ToxiCN/data/test.json）")
+    parser.add_argument("--test_json", nargs="+", default=None,
+                        help="测试集 JSON 路径，可传多个；策略只训练一次，"
+                             "逐个测试集评估并各写一套结果文件（默认 ToxiCN/data/test.json）")
     parser.add_argument("--val_metric", default="reward",
                         choices=["reward", "f1", "accuracy"],
                         help="用 ppo_dev 上的哪个指标选择最佳 epoch")
@@ -155,12 +168,13 @@ def main():
     ppo_device = get_device(args.ppo_device)
     print(f"Classifier device: {device}; PPO device: {ppo_device}")
 
-    # 1) 清洗并切分数据：clf_train / clf_dev / ppo_train / ppo_dev / test
+    # 1) 清洗并切分数据：clf_train / clf_dev / ppo_train / ppo_dev，外加测试集列表。
+    train_kwargs = ({"train_json": Path(args.train_json)}
+                    if args.train_json else {})
+    test_paths = ([Path(p) for p in args.test_json] if args.test_json
+                  else [DataConfig().test_json])
     data_cfg = DataConfig(max_len=args.max_len, seed=args.seed,
-                          **({"train_json": Path(args.train_json)}
-                             if args.train_json else {}),
-                          **({"test_json": Path(args.test_json)}
-                             if args.test_json else {}))
+                          test_json=test_paths[0], **train_kwargs)
     splits = build_splits(data_cfg)
     print_split_stats(splits)
 
@@ -178,13 +192,12 @@ def main():
     stage2_priority += [i for i in s2 if i not in stage2_priority]
     print(f"Stage 2 priority: {[specs[i].name for i in stage2_priority]}")
 
-    # 2) 用冻结分类器给 ppo_train / ppo_dev / test 打分（有缓存则复用，--force_scores 强制重算）
+    # 2) 用冻结分类器给 ppo_train / ppo_dev 打分（有缓存则复用，--force_scores 强制重算）；
+    #    测试集在训练结束后逐个打分，缓存按测试集 tag 分开存放，互不覆盖。
     ppo_scores = score_split(specs, splits["ppo_train"], "ppo_train", device,
                              args.force_scores)
     ppo_dev_scores = score_split(specs, splits["ppo_dev"], "ppo_dev", device,
                                  args.force_scores)
-    test_scores = score_split(specs, splits["test"], "test", device,
-                              args.force_scores)
 
     # 3) 组装配置：PPO 超参、奖励参数、静态基线阈值
     ppo_cfg = PPOConfig(epochs=args.epochs, batch_size=args.batch_size,
@@ -234,24 +247,7 @@ def main():
         "history": history,
     }, PPO_DIR / "policy.pt")
 
-    test_env = PPOEnv(test_scores["probs"], test_scores["labels"],
-                      test_scores["latencies"], reward_cfg,
-                      stage1_idx=s1, stage2_idx=s2,
-                      max_steps=ppo_cfg.max_steps, threshold=args.threshold,
-                      stage2_priority=stage2_priority)
-    # 5) 在测试集上用贪心策略评估 PPO-CIS
-    ppo_metrics = evaluate_policy(policy, test_env, ppo_device)
-
-    # 6) 计算全部静态基线，并把 PPO-CIS 一起放进对比表
-    results = static_baselines(test_scores["probs"], test_scores["labels"],
-                               test_scores["latencies"],
-                               [spec.name for spec in specs], static_cfg,
-                               stage1_idx=s1, stage2_idx=s2)
-    results["PPO-CIS"] = ppo_metrics
-
-    print("\nTest-set comparison:")
-    print_table(results)
-
+    # 5) 逐个测试集评估同一份策略：打分 → 贪心评估 PPO-CIS → 静态基线 → 落盘
     classifier_metrics = {}
     metrics_path = CLASSIFIER_DIR / "metrics.json"
     if metrics_path.exists():
@@ -262,45 +258,81 @@ def main():
                "accuracy": "val_accuracy"}[args.val_metric]
     best_epoch = max(history, key=lambda h: h.get(val_key, float("-inf")))["epoch"]
 
-    # 7) 汇总数据统计、配置、训练曲线和结果，写出 JSON / CSV / MD / PNG
-    payload = {
-        "data": splits["stats"],
-        "stage1": [specs[i].name for i in s1],
-        "stage2": [specs[i].name for i in s2],
-        "classifiers": classifier_metrics,
-        "static_config": asdict(static_cfg),
-        "ppo_config": asdict(ppo_cfg),
-        "reward_config": asdict(reward_cfg),
-        "threshold": args.threshold,
-        "val_metric": args.val_metric,
-        "ppo_history": history,
-        "ppo_best_epoch": best_epoch,
-        "ppo_val": ppo_val_metrics,
-        "results": results,
-    }
+    # 训练侧全部样本，用于给额外的测试集做跨集去重（四个划分互不相交，拼起来就是全集）。
+    all_train_rows = (splits["clf_train"] + splits["clf_dev"]
+                      + splits["ppo_train"] + splits["ppo_dev"])
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    save_json(payload, REPORT_DIR / "ppo_cis_results.json")
-
-    with open(REPORT_DIR / "ppo_cis_results.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["method"] + METHOD_COLUMNS)
-        for name, metrics in results.items():
-            writer.writerow([name] + [metrics.get(col, "") for col in METHOD_COLUMNS])
-
-    write_markdown(results, classifier_metrics, specs,
-                   REPORT_DIR / "ppo_cis_results.md")
-
     print(f"\nSaved: {PPO_DIR / 'policy.pt'}")
-    print(f"Saved: {REPORT_DIR / 'ppo_cis_results.csv'}")
-    print(f"Saved: {REPORT_DIR / 'ppo_cis_results.md'}")
-    print(f"Saved: {REPORT_DIR / 'ppo_cis_results.json'}")
 
-    if not args.no_plot:
-        try:
-            png = make_plots()
-            print(f"Saved: {png}")
-        except Exception as exc:      # matplotlib missing / headless backend issues
-            print(f"[plot] skipped: {exc}")
+    for idx, test_path in enumerate(test_paths):
+        tag = _test_tag(test_path)
+        if idx == 0:
+            test_rows = splits["test"]
+            test_stats = splits["stats"]["dataset"]
+        else:
+            eval_cfg = DataConfig(max_len=args.max_len, seed=args.seed,
+                                  test_json=test_path, **train_kwargs)
+            test_rows, test_stats = build_test_split(eval_cfg, all_train_rows)
+        print(f"\n[eval] {test_path}  n={len(test_rows)}  tag={tag}")
+
+        test_scores = score_split(specs, test_rows, tag, device, args.force_scores)
+        test_env = PPOEnv(test_scores["probs"], test_scores["labels"],
+                          test_scores["latencies"], reward_cfg,
+                          stage1_idx=s1, stage2_idx=s2,
+                          max_steps=ppo_cfg.max_steps, threshold=args.threshold,
+                          stage2_priority=stage2_priority)
+        ppo_metrics = evaluate_policy(policy, test_env, ppo_device)
+
+        results = static_baselines(test_scores["probs"], test_scores["labels"],
+                                   test_scores["latencies"],
+                                   [spec.name for spec in specs], static_cfg,
+                                   stage1_idx=s1, stage2_idx=s2)
+        results["PPO-CIS"] = ppo_metrics
+
+        print(f"\nTest-set comparison ({tag}):")
+        print_table(results)
+
+        # 6) 汇总数据统计、配置、训练曲线和结果，写出 JSON / CSV / MD / PNG
+        payload = {
+            "data": splits["stats"],
+            "test_file": str(test_path),
+            "test_tag": tag,
+            "test_set": test_stats,
+            "stage1": [specs[i].name for i in s1],
+            "stage2": [specs[i].name for i in s2],
+            "classifiers": classifier_metrics,
+            "static_config": asdict(static_cfg),
+            "ppo_config": asdict(ppo_cfg),
+            "reward_config": asdict(reward_cfg),
+            "threshold": args.threshold,
+            "val_metric": args.val_metric,
+            "ppo_history": history,
+            "ppo_best_epoch": best_epoch,
+            "ppo_val": ppo_val_metrics,
+            "results": results,
+        }
+        json_path = REPORT_DIR / f"ppo_cis_results_{tag}.json"
+        csv_path = REPORT_DIR / f"ppo_cis_results_{tag}.csv"
+        md_path = REPORT_DIR / f"ppo_cis_results_{tag}.md"
+        save_json(payload, json_path)
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["method"] + METHOD_COLUMNS)
+            for name, metrics in results.items():
+                writer.writerow([name] + [metrics.get(col, "") for col in METHOD_COLUMNS])
+
+        write_markdown(results, classifier_metrics, specs, md_path, test_tag=tag)
+        print(f"Saved: {csv_path}")
+        print(f"Saved: {md_path}")
+        print(f"Saved: {json_path}")
+
+        if not args.no_plot:
+            try:
+                png = make_plots(csv_path, REPORT_DIR / f"ppo_cis_comparison_{tag}.png")
+                print(f"Saved: {png}")
+            except Exception as exc:      # matplotlib missing / headless backend issues
+                print(f"[plot] skipped: {exc}")
 
 
 if __name__ == "__main__":

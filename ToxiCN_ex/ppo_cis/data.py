@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import torch
 from torch.utils.data import Dataset
@@ -64,6 +64,23 @@ def _clean(records: List[dict], min_chars: int) -> List[dict]:
 
 
 # ===================== 数据切分 =====================
+# 读取并清洗一个测试集文件，同时剔除与训练集文本完全相同的样本（防泄漏）。
+# train_rows 传入训练侧的全部样本，返回 (清洗后的测试样本, 统计信息)。
+def build_test_split(cfg: DataConfig, train_rows: List[dict]
+                     ) -> Tuple[List[dict], Dict[str, int]]:
+    """Clean ``cfg.test_json`` and drop texts that also occur in the training data."""
+    test_raw = _read_json(cfg.test_json)
+    test_rows = _clean(test_raw, cfg.min_chars)
+    train_texts = {row["text"] for row in train_rows}
+    kept = [row for row in test_rows if row["text"] not in train_texts]
+    stats = {
+        "test_raw": len(test_raw),
+        "test_clean": len(kept),
+        "test_dropped_overlap": len(test_rows) - len(kept),
+    }
+    return kept, stats
+
+
 # 先把 test 里与 train 重复的文本剔除（防泄漏），再从 train 按分层抽样切出
 # clf_dev（验证集，用于早停）和 ppo_train（策略训练集），剩下的作为 clf_train。
 def build_splits(cfg: DataConfig) -> Dict[str, list]:
@@ -71,14 +88,10 @@ def build_splits(cfg: DataConfig) -> Dict[str, list]:
     from sklearn.model_selection import train_test_split
 
     train_raw = _read_json(cfg.train_json)
-    test_raw = _read_json(cfg.test_json)
     train_rows = _clean(train_raw, cfg.min_chars)
-    test_rows = _clean(test_raw, cfg.min_chars)
 
     # 跨集去重：test 中与 train 完全相同的文本直接丢弃，避免任何形式的泄漏。
-    train_texts = {row["text"] for row in train_rows}
-    test_before = len(test_rows)
-    test_rows = [row for row in test_rows if row["text"] not in train_texts]
+    test_rows, test_stats = build_test_split(cfg, train_rows)
 
     labels = [row["label"] for row in train_rows]
     temp_size = cfg.val_ratio + cfg.ppo_ratio
@@ -112,9 +125,7 @@ def build_splits(cfg: DataConfig) -> Dict[str, list]:
             "dataset": {
                 "train_raw": len(train_raw),
                 "train_clean": len(train_rows),
-                "test_raw": len(test_raw),
-                "test_clean": len(test_rows),
-                "test_dropped_overlap": test_before - len(test_rows),
+                **test_stats,
             },
             "clf_train": label_stats(train_part),
             "clf_dev": label_stats(dev_part),
