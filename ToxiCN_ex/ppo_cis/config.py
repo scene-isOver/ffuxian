@@ -143,6 +143,7 @@ class ClassifierSpec:
     freeze_layers: int = 0
     patience: int = 1
     use_knowledge: bool = False    # TKE-BERT: feed toxic_ids / stance_ids
+    mlp_head: bool = False         # Stage-1: two-layer MLP head instead of the linear head
 
 
 # 五个分类器的完整定义：stage 1 两个小模型负责快速筛掉无毒样本，
@@ -161,26 +162,25 @@ def default_classifier_specs(bert_model: Optional[str] = None,
         # ---------------------------------------------------------- stage 1 (throughput)
         ClassifierSpec(
             name="tiny_bert", kind="bert", stage=1, model_name=tiny,
-            epochs=4, batch_size=64, lr=3e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            epochs=8, batch_size=32, lr=5e-5, weight_decay=0.01,
+            dropout=0.1, freeze_layers=0, patience=2, mlp_head=True,
         ),
         ClassifierSpec(
             name="distil_roberta", kind="bert", stage=1, model_name=distil,
-            epochs=4, batch_size=64, lr=3e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            epochs=8, batch_size=32, lr=5e-5, weight_decay=0.01,
+            dropout=0.1, freeze_layers=0, patience=2, mlp_head=True,
         ),
         # ---------------------------------------------------------- stage 2 (accuracy)
         ClassifierSpec(
             name="bert", kind="bert", stage=2, model_name=bert,
             epochs=3, batch_size=32, lr=2e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            dropout=0.1, freeze_layers=0, patience=1, mlp_head=True,
         ),
-        # 纯 RoBERTa：12 层全量微调，超参与 roberta_baseline.py 完全一致，
-        # 因此已有的 roberta_plain.pt 可以直接被级联复用，无需重训。
+        # 纯 RoBERTa：12 层全量微调，分类头与其余模型统一为两层 MLP。
         ClassifierSpec(
             name="roberta_plain", kind="bert", stage=2, model_name=roberta,
             epochs=5, batch_size=32, lr=2e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            dropout=0.1, freeze_layers=0, patience=1, mlp_head=True,
         ),
         ClassifierSpec(
             name="tke_bert", kind="tke_bert", stage=2, model_name=bert,
