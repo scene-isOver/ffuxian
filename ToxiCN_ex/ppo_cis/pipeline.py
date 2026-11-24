@@ -330,10 +330,9 @@ class PPOEnv:
                 mask[i, self.K] = True
                 mask[i, self.K + 1] = True
             else:
-                # 第二阶段：主判定模型调用过即可判定，两个动作都交给策略选择，
-                # 不再由阈值决定唯一结果——这样策略在第二阶段才有真正的决策空间。
-                if (self.stage2_primary is not None
-                        and bool(self.used[i, self.stage2_primary])):
+                # 第二阶段：任一 Stage-2 模型调用过即可判定，两个动作都交给
+                # 策略选择，不再要求必须先调用某个“主判定模型”。
+                if any(bool(self.used[i, j]) for j in self.stage2_idx):
                     mask[i, self.K] = True
                     mask[i, self.K + 1] = True
         return mask
