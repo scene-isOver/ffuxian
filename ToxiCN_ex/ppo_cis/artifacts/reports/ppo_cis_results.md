@@ -6,11 +6,6 @@ Stage 1 (throughput): `tiny_bert`, `distil_roberta`. Stage 2 (accuracy): `bert`,
 
 | Classifier | Stage | Acc | F1 | Latency (ms) | Throughput |
 |---|---:|---:|---:|---:|---:|
-| tiny_bert | 1 | 0.7869 | 0.7512 | 0.23 | 4267.6 |
-| distil_roberta | 1 | 0.7995 | 0.7699 | 0.17 | 5733.5 |
-| bert | 2 | 0.8177 | 0.7876 | 0.96 | 1037.8 |
-| roberta_plain | 2 | 0.8192 | 0.7898 | 0.92 | 1087.9 |
-| tke_bert | 2 | 0.8171 | 0.7865 | 0.93 | 1077.7 |
 
 ## Test-set comparison
 
@@ -25,4 +20,4 @@ Stage 1 (throughput): `tiny_bert`, `distil_roberta`. Stage 2 (accuracy): `bert`,
 | static_cascade | 0.8190 | 0.7501 | 0.8098 | 0.7788 | 1.61 | 0.74 | 1348.8 |
 | majority_vote | 0.8202 | 0.7286 | 0.8653 | 0.7911 | 5.00 | 3.22 | 310.6 |
 | soft_vote | 0.8192 | 0.7284 | 0.8620 | 0.7896 | 5.00 | 3.22 | 310.6 |
-| PPO-CIS | 0.8044 | 0.7202 | 0.8224 | 0.7679 | 1.45 | 0.59 | 1702.3 |
+| PPO-CIS | 0.7940 | 0.6873 | 0.8740 | 0.7695 | 1.50 | 0.63 | 1576.3 |
