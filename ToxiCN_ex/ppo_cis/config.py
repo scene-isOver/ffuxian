@@ -259,11 +259,17 @@ class RewardConfig:
     """
     correct_reward: float = 1.0       # r
     penalty_factor: float = 2.0       # iota: FP（无毒判成有毒）的惩罚系数
-    fn_penalty_factor: float = 2.5    # FN（有毒判成无毒）单独加重，原文 Eq.(1) 的 iota
+    fn_penalty_factor: float = 2.0    # FN（有毒判成无毒）单独加重，原文 Eq.(1) 的 iota
     time_budget: float = 0.0015       # u, seconds（1.5 ms 参考预算，见 time_reward）
     time_phi: float = 0.0             # phi
     time_theta: float = 0.5           # theta_1
     throughput_scale: float = 0.0     # Eq.(6) 仅作报告指标，默认不参与训练信号
+
+    # 原文 Eq.(7) 的批量门控：整批准确率低于 gate_l 时整体打折、高于 gate_u 时整体加成。
+    # gate_theta=0 表示关闭；门控只缩放奖励幅度，不改变动作合法性，也不引入人工判定阈值。
+    gate_l: float = 0.78
+    gate_u: float = 0.82
+    gate_theta: float = 2.0
     eps: float = 1e-6
 
 

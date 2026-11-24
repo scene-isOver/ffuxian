@@ -153,6 +153,23 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
     target = torch.where(has_done, first_done, fallback)
     rewards_t[target, torch.arange(n)] += share
 
+    # 原文 Eq.(7) 的批量门控：整批准确率低于 gate_l 时整体打折、高于 gate_u 时整体加成。
+    # 它只缩放奖励幅度，既不改变动作合法性，也不向策略注入任何人工判定阈值。
+    decided = env.pred >= 0
+    batch_acc = (float((env.pred[decided] == env.cur_labels[decided]).float().mean())
+                 if bool(decided.any()) else 0.0)
+    if reward_cfg.gate_theta > 0.0:
+        if batch_acc < reward_cfg.gate_l:
+            gate_scale = max(0.0, 1.0 - reward_cfg.gate_theta
+                             * (reward_cfg.gate_l - batch_acc))
+        elif batch_acc > reward_cfg.gate_u:
+            gate_scale = 1.0 + reward_cfg.gate_theta * (batch_acc - reward_cfg.gate_u)
+        else:
+            gate_scale = 1.0
+        rewards_t = rewards_t * gate_scale
+    else:
+        gate_scale = 1.0
+
     # 整批统计：总奖励、平均调用次数、吞吐 psi、从未升级到第二阶段的样本比例
     stats = {
         "episode_reward": float(rewards_t[stack(valid_list)].sum()),
@@ -160,6 +177,9 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
         "throughput_psi": float(psi),
         # 完全没有升级到第二阶段的样本比例：衡量策略“该不该跳”的行为
         "no_escalate_rate": float((env.stage == 1).float().mean()),
+        # Eq.(7) 门控用的整批准确率与缩放系数，便于观察策略是否被打折
+        "batch_acc": batch_acc,
+        "gate_scale": gate_scale,
     }
     return Rollout(
         obs=stack(obs_list),

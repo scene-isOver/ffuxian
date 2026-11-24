@@ -130,7 +130,7 @@ def main():
                         help="u in the time reward, in seconds (1.5 ms reference budget)")
     parser.add_argument("--time_theta", default=0.5, type=float,
                         help="theta_1: weight of the per-sample latency penalty")
-    parser.add_argument("--fn_penalty_factor", default=2.5, type=float,
+    parser.add_argument("--fn_penalty_factor", default=2.0, type=float,
                         help="penalty factor for FN (toxic judged nontoxic)")
     parser.add_argument("--throughput_scale", default=0.0, type=float,
                         help="weight of the Eq.(6) batch throughput bonus (report-only when 0)")
