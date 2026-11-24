@@ -7,7 +7,9 @@ simulates the cascade without re-running the heavy transformer encoders.
 Environment (two stages, following the paper's MDP):
     state   : beta vector of length K; called classifiers hold p(toxic),
               uncalled classifiers hold -1.
-    actions : 0..K-1 = call classifier k, K = "toxic", K+1 = "nontoxic".
+    actions : 0..K-1 = call classifier k,
+              K = stage-1 escalate, K+1 = stage-1 nontoxic,
+              K+2 = stage-2 toxic, K+3 = stage-2 nontoxic.
     stage 1 : 只输出“无毒”；融合概率达阈值即可出口，调用过任意模型后也可随时
               升级到第二阶段（策略自己决定什么时候跳过剩余小模型）。
     stage 2 : 按同一阈值单侧判定：无毒概率达阈值判无毒，否则判有毒。
@@ -210,8 +212,16 @@ def throughput_bonus(total_latency_sec: float, n_samples: int,
 class PPOEnv:
     """One episode per sample with a two-stage cascade.
 
-    Actions (K+2): 0..K-1 select classifier k, K = "toxic", K+1 = "nontoxic".
-    In stage 1 "toxic" means *escalate to stage 2*; in stage 2 it terminates.
+    动作空间（K+4）：
+        0..K-1  调用第 k 个分类器
+        K       第一阶段：升级到第二阶段
+        K+1     第一阶段：判定无毒并结束
+        K+2     第二阶段：判定有毒
+        K+3     第二阶段：判定无毒
+
+    第一阶段的“升级”与第二阶段的“判定”使用不同的输出编号：两者语义不同
+    （升级不是一次预测），共用一个编号会让策略把一个学到的偏好同时用在两处，
+    导致第二阶段退化成常数判定。每个阶段只开放属于自己的两个判定动作。
     """
 
     def __init__(self, probs: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
@@ -224,7 +234,12 @@ class PPOEnv:
         self.latencies = torch.as_tensor(latencies, dtype=torch.float32)
         self.cfg = reward_cfg
         self.K = self.probs.shape[1]
-        self.action_dim = self.K + 2
+        # 四个判定动作的编号，见类文档字符串
+        self.escalate_action = self.K
+        self.exit_action = self.K + 1
+        self.toxic_action = self.K + 2
+        self.nontoxic_action = self.K + 3
+        self.action_dim = self.K + 4
         self.stage1_idx = list(stage1_idx)
         self.stage2_idx = list(stage2_idx)
         self.max_steps = max_steps
@@ -309,7 +324,8 @@ class PPOEnv:
         只要调用过至少一个模型，两个判定动作就同时开放、由策略自己选，
         不再用阈值预先筛掉其中一个。
 
-        第二阶段：主判定模型被调用后，“判有毒”与“判无毒”两个动作同时开放。
+        第二阶段：任一 Stage-2 模型被调用后，“判有毒”与“判无毒”两个动作同时开放。
+        两个阶段使用互不相同的判定编号（K/K+1 vs K+2/K+3），避免共用输出列。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -327,14 +343,14 @@ class PPOEnv:
             if int(self.stage[i]) == 1:
                 # 对齐原文 A1 = |L1| + 2：调用过模型后，“判无毒”与“升级”
                 # 两个动作都开放，出口时机完全由策略决定。
-                mask[i, self.K] = True
-                mask[i, self.K + 1] = True
+                mask[i, self.escalate_action] = True
+                mask[i, self.exit_action] = True
             else:
                 # 第二阶段：任一 Stage-2 模型调用过即可判定，两个动作都交给
                 # 策略选择，不再要求必须先调用某个“主判定模型”。
                 if any(bool(self.used[i, j]) for j in self.stage2_idx):
-                    mask[i, self.K] = True
-                    mask[i, self.K + 1] = True
+                    mask[i, self.toxic_action] = True
+                    mask[i, self.nontoxic_action] = True
         return mask
 
     # ------------------------------------------------------------- rewards ----
@@ -394,13 +410,14 @@ class PPOEnv:
             action = int(actions[i])
 
             if action >= self.K:
-                if int(self.stage[i]) == 1:
-                    if action == self.K:          # "toxic" in stage 1 = escalate
-                        self.stage[i] = 2
-                    else:                          # confident nontoxic -> exit
-                        self._terminate(i, 0, rewards)
-                else:
-                    self._terminate(i, 1 if action == self.K else 0, rewards)
+                if action == self.escalate_action:
+                    self.stage[i] = 2
+                elif action == self.exit_action:      # 第一阶段：判无毒并结束
+                    self._terminate(i, 0, rewards)
+                elif action == self.toxic_action:     # 第二阶段：判有毒
+                    self._terminate(i, 1, rewards)
+                else:                                 # 第二阶段：判无毒
+                    self._terminate(i, 0, rewards)
                 continue
 
             k = action

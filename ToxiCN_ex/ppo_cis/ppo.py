@@ -111,7 +111,7 @@ def collect_rollout(env, policy: ActorCritic, device: torch.device,
         # 只保证判定动作有样本量、拿得到梯度。这里刻意不按阈值挑动作，
         # 否则等于把固定级联的行为当作示范喂给策略。
         if explore_decide > 0.0:
-            decide_ok = mask_v[:, env.K:env.K + 2]
+            decide_ok = mask_v[:, env.K:]
             can_decide = decide_ok.any(dim=1)
             force_mask = (torch.rand(can_decide.shape, device=device) < explore_decide) & can_decide
             if bool(force_mask.any()):
