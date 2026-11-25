@@ -141,7 +141,7 @@ def main():
                         help="fraction of rollouts forced to a uniformly random legal decision")
     parser.add_argument("--time_budget", default=0.0015, type=float,
                         help="u in the time reward, in seconds (1.5 ms reference budget)")
-    parser.add_argument("--time_theta", default=0.5, type=float,
+    parser.add_argument("--time_theta", default=0.15, type=float,
                         help="theta_1: weight of the per-sample latency penalty")
     parser.add_argument("--fn_penalty_factor", default=2.0, type=float,
                         help="penalty factor for FN (toxic judged nontoxic)")

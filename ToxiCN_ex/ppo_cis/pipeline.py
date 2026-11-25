@@ -209,6 +209,11 @@ def throughput_bonus(total_latency_sec: float, n_samples: int,
 
 # ------------------------------------------------------------ environment -----_
 
+# 判定阈值写死为 0.7：出口与有毒/无毒的结论都由这条规则给出，
+# 策略只负责学“调哪个模型、什么时候跳级”，阈值不参与学习。
+FIXED_THRESHOLD = 0.7
+
+
 class PPOEnv:
     """One episode per sample with a two-stage cascade.
 
@@ -221,13 +226,16 @@ class PPOEnv:
 
     第一阶段的“升级”与第二阶段的“判定”使用不同的输出编号：两者语义不同
     （升级不是一次预测），共用一个编号会让策略把一个学到的偏好同时用在两处，
-    导致第二阶段退化成常数判定。每个阶段只开放属于自己的两个判定动作。
+    导致第二阶段退化成常数判定。
+
+    判定阈值固定为 0.7（``FIXED_THRESHOLD``）：有毒/无毒的结论由这条规则给出，
+    策略只学习调用顺序与跳级时机，不学习阈值。
     """
 
     def __init__(self, probs: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
                  reward_cfg: RewardConfig, stage1_idx: Sequence[int],
                  stage2_idx: Sequence[int], max_steps: int = 8,
-                 threshold: float = 0.7,
+                 threshold: float = FIXED_THRESHOLD,
                  stage2_priority: Optional[Sequence[int]] = None):
         self.probs = torch.as_tensor(probs, dtype=torch.float32)
         self.labels = torch.as_tensor(labels, dtype=torch.long)
@@ -243,7 +251,7 @@ class PPOEnv:
         self.stage1_idx = list(stage1_idx)
         self.stage2_idx = list(stage2_idx)
         self.max_steps = max_steps
-        self.threshold = threshold
+        self.threshold = FIXED_THRESHOLD
         # Stage 2 判定优先级：rank 越小越优先，第一个是主判定模型。
         # 默认沿用 stage2_idx 的顺序，train_ppo 会按 --stage2_priority 传入。
         priority = list(stage2_priority) if stage2_priority else self.stage2_idx
@@ -319,13 +327,14 @@ class PPOEnv:
     def action_mask(self) -> torch.Tensor:
         """返回每条样本当前的合法动作掩码。
 
-        两个阶段都按原文的动作空间定义：调用本阶段任一尚未使用的分类器，
-        或者直接做出终止判定。第一阶段“判有毒”等价于升级，“判无毒”则结束；
-        只要调用过至少一个模型，两个判定动作就同时开放、由策略自己选，
-        不再用阈值预先筛掉其中一个。
+        阈值（0.7）写死，结论由规则给出，策略只决定调用顺序与跳级时机：
 
-        第二阶段：任一 Stage-2 模型被调用后，“判有毒”与“判无毒”两个动作同时开放。
-        两个阶段使用互不相同的判定编号（K/K+1 vs K+2/K+3），避免共用输出列。
+        第一阶段：只输出“无毒”。融合后的无毒概率达到阈值才允许出口；只要已经
+        调用过至少一个模型，就允许随时升级到第二阶段（策略自己学什么时候跳过
+        剩余的小模型）。
+        第二阶段：主判定模型按阈值给出结论（灰区时参考第二优先级的模型），
+        掩码只开放该结论对应的动作。
+        两个阶段使用互不相同的判定编号（K+1 vs K+2/K+3），避免共用输出列。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -341,16 +350,16 @@ class PPOEnv:
                 continue
 
             if int(self.stage[i]) == 1:
-                # 对齐原文 A1 = |L1| + 2：调用过模型后，“判无毒”与“升级”
-                # 两个动作都开放，出口时机完全由策略决定。
-                mask[i, self.escalate_action] = True
-                mask[i, self.exit_action] = True
+                mean_toxic = float(self.state[i, used_cols].mean())
+                mean_nontoxic = 1.0 - mean_toxic
+                if mean_nontoxic >= self.threshold:
+                    mask[i, self.exit_action] = True      # 融合概率可信 -> 判无毒出口
+                mask[i, self.escalate_action] = True      # 调用过模型即可升级
             else:
-                # 第二阶段：任一 Stage-2 模型调用过即可判定，两个动作都交给
-                # 策略选择，不再要求必须先调用某个“主判定模型”。
-                if any(bool(self.used[i, j]) for j in self.stage2_idx):
-                    mask[i, self.toxic_action] = True
-                    mask[i, self.nontoxic_action] = True
+                # 第二阶段：由固定阈值规则给结论，策略只负责把模型调出来
+                pred, decided = self._stage2_decision(i, used_cols)
+                if decided:
+                    mask[i, self.toxic_action if pred == 1 else self.nontoxic_action] = True
         return mask
 
     # ------------------------------------------------------------- rewards ----

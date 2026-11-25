@@ -262,7 +262,7 @@ class RewardConfig:
     fn_penalty_factor: float = 2.0    # FN（有毒判成无毒）单独加重，原文 Eq.(1) 的 iota
     time_budget: float = 0.0015       # u, seconds（1.5 ms 参考预算，见 time_reward）
     time_phi: float = 0.0             # phi
-    time_theta: float = 0.5           # theta_1
+    time_theta: float = 0.15          # theta_1
     throughput_scale: float = 0.0     # Eq.(6) 仅作报告指标，默认不参与训练信号
 
     # 原文 Eq.(7) 的批量门控：整批准确率低于 gate_l 时整体打折、高于 gate_u 时整体加成。
