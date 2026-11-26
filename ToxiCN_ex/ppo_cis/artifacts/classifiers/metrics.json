@@ -1,5 +1,6 @@
 {
   "tiny_bert": {
+<<<<<<< HEAD
     "accuracy": 0.7681352069882263,
     "precision": 0.6573012939001849,
     "recall": 0.8581081081081081,
@@ -15,6 +16,23 @@
     "n_train": 33283,
     "n_test": 5266,
     "model_name": "D:\\models\\ppo_cis_models\\bert-tiny-chinese"
+=======
+    "accuracy": 0.7833270034181542,
+    "precision": 0.6810579541034617,
+    "recall": 0.8450772200772201,
+    "f1": 0.7542537152702994,
+    "fnr": 0.15492277992277992,
+    "fpr": 0.2567313713212273,
+    "loss": 0.6460044322591839,
+    "latency_sec": 0.0002182123437705741,
+    "latency_ms": 0.21821234377057408,
+    "throughput": 4582.692173690176,
+    "measured_samples": 640,
+    "best_epoch": 7,
+    "n_train": 27042,
+    "n_test": 5266,
+    "model_name": "D:\\models\\bert-tiny-chinese"
+>>>>>>> 42bdfa409d607860bcbacb2142b62aaaa749f373
   },
   "_meta": {
     "loss": "CrossEntropyLoss",
@@ -22,6 +40,7 @@
     "max_len": 96
   },
   "distil_roberta": {
+<<<<<<< HEAD
     "accuracy": 0.7977592100265857,
     "precision": 0.6997223324077747,
     "recall": 0.8513513513513513,
@@ -88,5 +107,73 @@
     "n_train": 33283,
     "n_test": 5266,
     "model_name": "D:\\models\\ppo_cis_models\\bert-base-chinese"
+=======
+    "accuracy": 0.796619825294341,
+    "precision": 0.6957371920219007,
+    "recall": 0.8585907335907336,
+    "f1": 0.7686325340246274,
+    "fnr": 0.1414092664092664,
+    "fpr": 0.24358171571696932,
+    "loss": 0.704645142771981,
+    "latency_sec": 0.0001282187500009968,
+    "latency_ms": 0.1282187500009968,
+    "throughput": 7799.1713379847,
+    "measured_samples": 640,
+    "best_epoch": 7,
+    "n_train": 27042,
+    "n_test": 5266,
+    "model_name": "D:\\models\\chinese_roberta_L-4_H-256"
+  },
+  "bert": {
+    "accuracy": 0.8112419293581467,
+    "precision": 0.706989247311828,
+    "recall": 0.8885135135135135,
+    "f1": 0.7874251497005988,
+    "fnr": 0.11148648648648649,
+    "fpr": 0.23888541014402004,
+    "loss": 0.5796325318741076,
+    "latency_sec": 0.0009130929687444223,
+    "latency_ms": 0.9130929687444223,
+    "throughput": 1095.1787323201952,
+    "measured_samples": 640,
+    "best_epoch": 1,
+    "n_train": 27042,
+    "n_test": 5266,
+    "model_name": "D:\\models\\bert-base-chinese"
+  },
+  "roberta_plain": {
+    "accuracy": 0.8194075199392328,
+    "precision": 0.7244693632358831,
+    "recall": 0.8730694980694981,
+    "f1": 0.7918581746552856,
+    "fnr": 0.12693050193050193,
+    "fpr": 0.21540388227927365,
+    "loss": 0.554766101548166,
+    "latency_sec": 0.0009292709374904007,
+    "latency_ms": 0.9292709374904007,
+    "throughput": 1076.1124228210676,
+    "measured_samples": 640,
+    "best_epoch": 1,
+    "n_train": 27042,
+    "n_test": 5266,
+    "model_name": "D:\\models\\chinese-roberta-wwm-ext"
+  },
+  "tke_bert": {
+    "accuracy": 0.819787314849981,
+    "precision": 0.7270521633643349,
+    "recall": 0.8677606177606177,
+    "f1": 0.7911991199119912,
+    "fnr": 0.13223938223938225,
+    "fpr": 0.2113337507827176,
+    "loss": 0.5291862408798861,
+    "latency_sec": 0.0009139793750023272,
+    "latency_ms": 0.9139793750023273,
+    "throughput": 1094.1165931643193,
+    "measured_samples": 1280,
+    "best_epoch": 2,
+    "n_train": 27042,
+    "n_test": 5266,
+    "model_name": "D:\\models\\bert-base-chinese"
+>>>>>>> 42bdfa409d607860bcbacb2142b62aaaa749f373
   }
 }

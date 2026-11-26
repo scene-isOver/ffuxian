@@ -72,6 +72,35 @@ class TransformerClassifier(nn.Module):
         return outputs.logits
 
 
+# Stage-1 专用：HF 编码器 + 两层 MLP 头（hidden -> 256 -> 2），
+# 为 tiny_bert / distil_roberta 提供非线性下游分类器。
+class MLPTransformerClassifier(nn.Module):
+    """HF encoder (AutoModel) with a two-layer MLP classification head."""
+
+    def __init__(self, model_name: str, num_classes: int = 2, dropout: float = 0.1,
+                 freeze_layers: int = 0, fc_hidden_dim: int = 256):
+        super().__init__()
+        self.encoder = AutoModel.from_pretrained(model_name, local_files_only=True)
+        hidden = self.encoder.config.hidden_size
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden, fc_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(fc_hidden_dim, num_classes),
+        )
+        _freeze_layers(self.encoder, freeze_layers)
+
+    def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None,
+                toxic_ids: Optional[torch.Tensor] = None,
+                stance_ids: Optional[torch.Tensor] = None):
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        cls = outputs.last_hidden_state[:, 0, :]
+        return self.classifier(self.dropout(cls))
+
+
 # RoBERTa + BiGRU + 多尺度 TextCNN：两路特征拼接后过两层全连接（roberta_fusion）。
 class RoBertFusionClassifier(nn.Module):
     """RoBERTa + BiGRU + TextCNN, following CHSD/model.py :: RoBertFusion."""
@@ -186,6 +215,9 @@ def build_classifier(spec, vocab_size: int = 0, pad_id: int = 0) -> nn.Module:
     """
     model_name = resolve_model_name(spec.model_name)
     if spec.kind == "bert":
+        if getattr(spec, "mlp_head", False):
+            return MLPTransformerClassifier(model_name, dropout=spec.dropout,
+                                            freeze_layers=spec.freeze_layers)
         return TransformerClassifier(model_name, dropout=spec.dropout,
                                      freeze_layers=spec.freeze_layers)
     if spec.kind == "roberta_fusion":

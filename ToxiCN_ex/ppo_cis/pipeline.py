@@ -7,7 +7,9 @@ simulates the cascade without re-running the heavy transformer encoders.
 Environment (two stages, following the paper's MDP):
     state   : beta vector of length K; called classifiers hold p(toxic),
               uncalled classifiers hold -1.
-    actions : 0..K-1 = call classifier k, K = "toxic", K+1 = "nontoxic".
+    actions : 0..K-1 = call classifier k,
+              K = stage-1 escalate, K+1 = stage-1 nontoxic,
+              K+2 = stage-2 toxic, K+3 = stage-2 nontoxic.
     stage 1 : 只输出“无毒”；融合概率达阈值即可出口，调用过任意模型后也可随时
               升级到第二阶段（策略自己决定什么时候跳过剩余小模型）。
     stage 2 : 按同一阈值单侧判定：无毒概率达阈值判无毒，否则判有毒。
@@ -207,28 +209,49 @@ def throughput_bonus(total_latency_sec: float, n_samples: int,
 
 # ------------------------------------------------------------ environment -----_
 
+# 判定阈值写死为 0.7：出口与有毒/无毒的结论都由这条规则给出，
+# 策略只负责学“调哪个模型、什么时候跳级”，阈值不参与学习。
+FIXED_THRESHOLD = 0.7
+
+
 class PPOEnv:
     """One episode per sample with a two-stage cascade.
 
-    Actions (K+2): 0..K-1 select classifier k, K = "toxic", K+1 = "nontoxic".
-    In stage 1 "toxic" means *escalate to stage 2*; in stage 2 it terminates.
+    动作空间（K+4）：
+        0..K-1  调用第 k 个分类器
+        K       第一阶段：升级到第二阶段
+        K+1     第一阶段：判定无毒并结束
+        K+2     第二阶段：判定有毒
+        K+3     第二阶段：判定无毒
+
+    第一阶段的“升级”与第二阶段的“判定”使用不同的输出编号：两者语义不同
+    （升级不是一次预测），共用一个编号会让策略把一个学到的偏好同时用在两处，
+    导致第二阶段退化成常数判定。
+
+    判定阈值固定为 0.7（``FIXED_THRESHOLD``）：有毒/无毒的结论由这条规则给出，
+    策略只学习调用顺序与跳级时机，不学习阈值。
     """
 
     def __init__(self, probs: np.ndarray, labels: np.ndarray, latencies: np.ndarray,
                  reward_cfg: RewardConfig, stage1_idx: Sequence[int],
                  stage2_idx: Sequence[int], max_steps: int = 8,
-                 threshold: float = 0.7,
+                 threshold: float = FIXED_THRESHOLD,
                  stage2_priority: Optional[Sequence[int]] = None):
         self.probs = torch.as_tensor(probs, dtype=torch.float32)
         self.labels = torch.as_tensor(labels, dtype=torch.long)
         self.latencies = torch.as_tensor(latencies, dtype=torch.float32)
         self.cfg = reward_cfg
         self.K = self.probs.shape[1]
-        self.action_dim = self.K + 2
+        # 四个判定动作的编号，见类文档字符串
+        self.escalate_action = self.K
+        self.exit_action = self.K + 1
+        self.toxic_action = self.K + 2
+        self.nontoxic_action = self.K + 3
+        self.action_dim = self.K + 4
         self.stage1_idx = list(stage1_idx)
         self.stage2_idx = list(stage2_idx)
         self.max_steps = max_steps
-        self.threshold = threshold
+        self.threshold = FIXED_THRESHOLD
         # Stage 2 判定优先级：rank 越小越优先，第一个是主判定模型。
         # 默认沿用 stage2_idx 的顺序，train_ppo 会按 --stage2_priority 传入。
         priority = list(stage2_priority) if stage2_priority else self.stage2_idx
@@ -304,12 +327,14 @@ class PPOEnv:
     def action_mask(self) -> torch.Tensor:
         """返回每条样本当前的合法动作掩码。
 
-        第一阶段：只输出“无毒”。融合后的无毒概率达到阈值就允许出口；只要已经
-        调用过至少一个模型，就允许随时升级到第二阶段（不再要求把第一阶段用满，
-        这样策略才能学“什么时候跳过剩下的小模型”）。
+        阈值（0.7）写死，结论由规则给出，策略只决定调用顺序与跳级时机：
 
-        第二阶段：由主判定模型（默认 bert）给出结论；只有当它落在灰区时，才用
-        下一优先级的模型做第二意见，避免弱模型参与平均稀释强模型。
+        第一阶段：只输出“无毒”。融合后的无毒概率达到阈值才允许出口；只要已经
+        调用过至少一个模型，就允许随时升级到第二阶段（策略自己学什么时候跳过
+        剩余的小模型）。
+        第二阶段：主判定模型按阈值给出结论（灰区时参考第二优先级的模型），
+        掩码只开放该结论对应的动作。
+        两个阶段使用互不相同的判定编号（K+1 vs K+2/K+3），避免共用输出列。
         """
         mask = torch.zeros((self.n, self.action_dim), dtype=torch.bool)
         for i in range(self.n):
@@ -325,17 +350,16 @@ class PPOEnv:
                 continue
 
             if int(self.stage[i]) == 1:
-                mean_toxic = float(torch.stack(
-                    [self.state[i, k] for k in used_cols]).mean())
+                mean_toxic = float(self.state[i, used_cols].mean())
                 mean_nontoxic = 1.0 - mean_toxic
                 if mean_nontoxic >= self.threshold:
-                    mask[i, self.K + 1] = True      # 融合概率可信 -> 判无毒出口
-                mask[i, self.K] = True              # 调用过模型即可升级
+                    mask[i, self.exit_action] = True      # 融合概率可信 -> 判无毒出口
+                mask[i, self.escalate_action] = True      # 调用过模型即可升级
             else:
-                # 第二阶段：主判定模型说了算，灰区才找第二意见
+                # 第二阶段：由固定阈值规则给结论，策略只负责把模型调出来
                 pred, decided = self._stage2_decision(i, used_cols)
                 if decided:
-                    mask[i, self.K if pred == 1 else self.K + 1] = True
+                    mask[i, self.toxic_action if pred == 1 else self.nontoxic_action] = True
         return mask
 
     # ------------------------------------------------------------- rewards ----
@@ -343,7 +367,14 @@ class PPOEnv:
     def _terminal_reward(self, i: int, pred: int) -> float:
         label = int(self.cur_labels[i])
         r = self.cfg.correct_reward
-        reward = r if pred == label else -self.cfg.penalty_factor * r
+        if pred == label:
+            reward = r
+        else:
+            # 漏判有毒（FN）比误判无毒（FP）危害更大：原文 Eq.(1) 允许对 FN
+            # 单独加重惩罚，避免策略为了省一次调用而提前判无毒。
+            factor = (self.cfg.fn_penalty_factor if label == 1
+                      else self.cfg.penalty_factor)
+            reward = -factor * r
         reward += time_reward(float(self.elapsed[i]), self.cfg)
         return reward
 
@@ -388,13 +419,14 @@ class PPOEnv:
             action = int(actions[i])
 
             if action >= self.K:
-                if int(self.stage[i]) == 1:
-                    if action == self.K:          # "toxic" in stage 1 = escalate
-                        self.stage[i] = 2
-                    else:                          # confident nontoxic -> exit
-                        self._terminate(i, 0, rewards)
-                else:
-                    self._terminate(i, 1 if action == self.K else 0, rewards)
+                if action == self.escalate_action:
+                    self.stage[i] = 2
+                elif action == self.exit_action:      # 第一阶段：判无毒并结束
+                    self._terminate(i, 0, rewards)
+                elif action == self.toxic_action:     # 第二阶段：判有毒
+                    self._terminate(i, 1, rewards)
+                else:                                 # 第二阶段：判无毒
+                    self._terminate(i, 0, rewards)
                 continue
 
             k = action

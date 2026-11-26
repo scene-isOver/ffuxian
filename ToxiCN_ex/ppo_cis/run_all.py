@@ -45,7 +45,7 @@ def main():
                         help="Eq.(6) bonus weight; 0 keeps it report-only")
     parser.add_argument("--aux_coef", default=0.10, type=float)
     parser.add_argument("--entropy_coef", default=0.05, type=float)
-    parser.add_argument("--explore_decide", default=0.10, type=float)
+    parser.add_argument("--explore_decide", default=0.05, type=float)
     parser.add_argument("--threshold", default=0.70, type=float)
     parser.add_argument("--only", nargs="*", default=None)
     parser.add_argument("--force", action="store_true")

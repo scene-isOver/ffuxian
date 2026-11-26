@@ -121,7 +121,7 @@ class DataConfig:
     test_json: Path = DATA_DIR / "test.json"
     max_len: int = 96
     val_ratio: float = 0.10        # split off from train.json for classifier validation
-    ppo_ratio: float = 0.10        # split off from train.json for PPO training
+    ppo_ratio: float = 0.25        # split off from train.json for PPO training
     ppo_dev_ratio: float = 0.20    # split off inside the PPO part for policy validation
     seed: int = 42
     min_chars: int = 2
@@ -143,6 +143,7 @@ class ClassifierSpec:
     freeze_layers: int = 0
     patience: int = 1
     use_knowledge: bool = False    # TKE-BERT: feed toxic_ids / stance_ids
+    mlp_head: bool = False         # Stage-1: two-layer MLP head instead of the linear head
 
 
 # 五个分类器的完整定义：stage 1 两个小模型负责快速筛掉无毒样本，
@@ -161,26 +162,25 @@ def default_classifier_specs(bert_model: Optional[str] = None,
         # ---------------------------------------------------------- stage 1 (throughput)
         ClassifierSpec(
             name="tiny_bert", kind="bert", stage=1, model_name=tiny,
-            epochs=4, batch_size=64, lr=3e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            epochs=8, batch_size=32, lr=5e-5, weight_decay=0.01,
+            dropout=0.1, freeze_layers=0, patience=2, mlp_head=True,
         ),
         ClassifierSpec(
             name="distil_roberta", kind="bert", stage=1, model_name=distil,
-            epochs=4, batch_size=64, lr=3e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            epochs=8, batch_size=32, lr=5e-5, weight_decay=0.01,
+            dropout=0.1, freeze_layers=0, patience=2, mlp_head=True,
         ),
         # ---------------------------------------------------------- stage 2 (accuracy)
         ClassifierSpec(
             name="bert", kind="bert", stage=2, model_name=bert,
             epochs=3, batch_size=32, lr=2e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            dropout=0.1, freeze_layers=0, patience=1, mlp_head=True,
         ),
-        # 纯 RoBERTa：12 层全量微调，超参与 roberta_baseline.py 完全一致，
-        # 因此已有的 roberta_plain.pt 可以直接被级联复用，无需重训。
+        # 纯 RoBERTa：12 层全量微调，分类头与其余模型统一为两层 MLP。
         ClassifierSpec(
             name="roberta_plain", kind="bert", stage=2, model_name=roberta,
             epochs=5, batch_size=32, lr=2e-5, weight_decay=0.01,
-            dropout=0.1, freeze_layers=0, patience=1,
+            dropout=0.1, freeze_layers=0, patience=1, mlp_head=True,
         ),
         ClassifierSpec(
             name="tke_bert", kind="tke_bert", stage=2, model_name=bert,
@@ -230,7 +230,7 @@ class PPOConfig:
     entropy_coef: float = 0.05     # 0.01 时熵只从 0.770 掉到 0.742，策略几乎不动
     value_coef: float = 0.5
     aux_coef: float = 0.10         # weight of the auxiliary cross-entropy head
-    explore_decide: float = 0.10   # 训练 rollout 中强制提前判定的比例（防塌缩）
+    explore_decide: float = 0.05   # rollout 中均匀强制判定的比例（只补覆盖，不注入规则）
     max_grad_norm: float = 1.0     # 配合 lr=1e-3；0.5 会频繁截断，实际步长上不去
     batch_size: int = 256          # samples per rollout batch
     epochs: int = 10               # full passes over ppo_train
@@ -258,11 +258,18 @@ class RewardConfig:
        ``throughput_scale=0``，只作为报告指标保留。
     """
     correct_reward: float = 1.0       # r
-    penalty_factor: float = 2.0       # iota
+    penalty_factor: float = 2.0       # iota: FP（无毒判成有毒）的惩罚系数
+    fn_penalty_factor: float = 2.0    # FN（有毒判成无毒）单独加重，原文 Eq.(1) 的 iota
     time_budget: float = 0.0015       # u, seconds（1.5 ms 参考预算，见 time_reward）
     time_phi: float = 0.0             # phi
-    time_theta: float = 0.5           # theta_1
+    time_theta: float = 0.15          # theta_1
     throughput_scale: float = 0.0     # Eq.(6) 仅作报告指标，默认不参与训练信号
+
+    # 原文 Eq.(7) 的批量门控：整批准确率低于 gate_l 时整体打折、高于 gate_u 时整体加成。
+    # gate_theta=0 表示关闭；门控只缩放奖励幅度，不改变动作合法性，也不引入人工判定阈值。
+    gate_l: float = 0.78
+    gate_u: float = 0.82
+    gate_theta: float = 2.0
     eps: float = 1e-6
 
 

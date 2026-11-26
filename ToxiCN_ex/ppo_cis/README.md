@@ -106,9 +106,9 @@ tokenizer 文件）。改完 `MODEL_ROOT` 后不需要再动别的地方。
 - **PPO-Clip**：`epsilon=0.2`、GAE(`gamma=0.99, lambda=0.95`)、
   value loss `0.5`、熵 `0.01`、辅助交叉熵 `0.10`、梯度裁剪 `0.5`；
   batch `256`、每个 batch 复用 `4` 次、共 `10` 个 epoch、MLP hidden `64`。
-- **防塌缩**：rollout 时以 `explore_decide=0.10` 的概率强制选择判定动作，
-  保证判定动作始终有样本量。若训练中仍然不早退，可以把 `--entropy_coef`
-  调到 `0.05` 或把 `--explore_decide` 调到 `0.30`。
+- **防塌缩**：rollout 时以 `explore_decide=0.05` 的概率在合法判定动作中均匀采样，
+  只保证判定动作有样本量，不注入阈值规则。若训练中仍然不早退，可以把
+  `--explore_decide` 调到 `0.15`。
 
 ## 与论文的差异
 

@@ -115,7 +115,8 @@ def legal_actions(row: np.ndarray, used: Sequence[int], stage: int,
                                  {j: r for r, j in enumerate(ctx.priority)},
                                  ctx.threshold)
         if pred is not None:
-            legal.append(k if pred == 1 else k + 1)
+            # 第二阶段判定使用独立编号：k+2 = 有毒，k+3 = 无毒
+            legal.append(k + 2 if pred == 1 else k + 3)
     return legal
 
 
@@ -214,7 +215,7 @@ class SemanticAgreement:
             if stage == 2:
                 order = sorted(env.stage2_idx,
                                key=lambda j: env.stage2_rank.get(j, 99))
-                actions[i] = _first_legal(m[i], [k, k + 1] + order)
+                actions[i] = _first_legal(m[i], [k + 2, k + 3] + order)
                 continue
             used1 = [j for j in env.stage1_idx if bool(env.used[i, j])]
             if used1:
@@ -275,7 +276,7 @@ class ConformalDeferral:
             if stage == 2:
                 order = sorted(env.stage2_idx,
                                key=lambda j: env.stage2_rank.get(j, 99))
-                actions[i] = _first_legal(m[i], [k, k + 1] + order)
+                actions[i] = _first_legal(m[i], [k + 2, k + 3] + order)
                 continue
             if not bool(env.used[i, self.rejector]):
                 actions[i] = _first_legal(m[i], [self.rejector])
@@ -572,7 +573,7 @@ class RouteLLMBinary:
             if int(env.stage[i]) == 2:
                 order = sorted(env.stage2_idx,
                                key=lambda j: env.stage2_rank.get(j, 99))
-                actions[i] = _first_legal(m[i], [k, k + 1] + order)
+                actions[i] = _first_legal(m[i], [k + 2, k + 3] + order)
                 continue
             if not bool(env.used[i, self.tiny]):
                 actions[i] = _first_legal(m[i], [self.tiny])
